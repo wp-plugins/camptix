@@ -16,11 +16,13 @@ class CampTix_Plugin {
 	protected $infos;
 	protected $admin_notices;
 
+	protected $tmp;
+
 	public $debug;
 	public $beta_features_enabled;
 	public $version = 20121227;
 	public $css_version = 20121227;
-	public $js_version = 20121227;
+	public $js_version = 20130109;
 	public $caps;
 
 	public $addons = array();
@@ -84,6 +86,7 @@ class CampTix_Plugin {
 		$this->options = $this->get_options();
 		$this->debug = (bool) apply_filters( 'camptix_debug', false );
 		$this->beta_features_enabled = (bool) apply_filters( 'camptix_beta_features_enabled', false );
+		$this->tmp = array();
 
 		// Capability mapping.
 		$this->caps = apply_filters( 'camptix_capabilities', array(
@@ -147,6 +150,7 @@ class CampTix_Plugin {
 
 		add_action( 'camptix_question_fields_init', array( $this, 'question_fields_init' ) );
 		add_action( 'camptix_init_notify_shortcodes', array( $this, 'init_notify_shortcodes' ), 9 );
+		add_action( 'camptix_init_email_templates_shortcodes', array( $this, 'init_email_templates_shortcodes' ), 9 );
 
 		// Other things required during init.
 		$this->custom_columns();
@@ -163,7 +167,7 @@ class CampTix_Plugin {
 		add_filter( 'cron_schedules', array( $this, 'cron_schedules' ) );
 
 		add_action( 'tix_scheduled_every_ten_minutes', array( $this, 'send_emails_batch' ) );
-		add_action( 'tix_scheduled_every_ten_minutes', array( $this, 'process_refund_all' ) );
+		// add_action( 'tix_scheduled_every_ten_minutes', array( $this, 'process_refund_all' ) );
 
 		add_action( 'tix_scheduled_daily', array( $this, 'review_timeout_payments' ) );
 
@@ -191,6 +195,10 @@ class CampTix_Plugin {
 	 */
 	function send_emails_batch() {
 		global $wpdb;
+
+		// Sometimes Cron can run before $this->init()
+		if ( ! did_action( 'camptix_init' ) )
+			$this->init();
 
 		// Grab only one e-mail job at a time.
 		$email = get_posts( array(
@@ -255,7 +263,7 @@ class CampTix_Plugin {
 							$this->log( sprintf( '%s is not a valid e-mail, removing from queue.', $attendee_email ), $email->ID, $data, 'notify' );
 						} else {
 
-							$this->notify_shortcodes_attendee_id = $attendee_id;
+							$this->tmp( 'attendee_id', $attendee_id );
 							$email_content = do_shortcode( $email->post_content );
 							$email_title = do_shortcode( $email->post_title );
 
@@ -277,7 +285,7 @@ class CampTix_Plugin {
 
 				// Clean post meta cache.
 				$this->filter_post_meta = false;
-				$this->notify_shortcodes_attendee_id = false;
+				$this->tmp( 'attendee_id', false );
 			}
 		}
 
@@ -297,6 +305,36 @@ class CampTix_Plugin {
 		}
 	}
 
+	function init_email_templates_shortcodes() {
+		remove_all_shortcodes();
+
+		// Use the same ones as the notify shortcode
+		add_shortcode( 'first_name', array( $this, 'notify_shortcode_first_name' ) );
+		add_shortcode( 'last_name', array( $this, 'notify_shortcode_last_name' ) );
+		add_shortcode( 'email', array( $this, 'notify_shortcode_email' ) );
+
+		add_shortcode( 'ticket_url', array( $this, 'email_template_shortcode_ticket_url' ) );
+		add_shortcode( 'receipt', array( $this, 'email_template_shortcode_receipt' ) );
+	}
+
+	/**
+	 * Returns the ticket access/edit URL.
+	 *
+	 * @uses $this->tmp() to retrieve the ticket url
+	 */
+	function email_template_shortcode_ticket_url( $atts ) {
+		return $this->tmp( 'ticket_url' );
+	}
+
+	/**
+	 * Returns the e-mail receipt content.
+	 *
+	 * @uses $this->tmp() to retrieve receipt content.
+	 */
+	function email_template_shortcode_receipt( $atts ) {
+		return $this->tmp( 'receipt' );
+	}
+
 	/**
 	 * Removes all shortcodes and creates some shortcodes
 	 * to be used with CampTix Notify.
@@ -314,35 +352,35 @@ class CampTix_Plugin {
 	 * Notify shortcode: returns the attendee first name.
 	 */
 	function notify_shortcode_first_name( $atts ) {
-		if ( $this->notify_shortcodes_attendee_id )
-			return get_post_meta( $this->notify_shortcodes_attendee_id, 'tix_first_name', true );
+		if ( $this->tmp( 'attendee_id' ) )
+			return get_post_meta( $this->tmp( 'attendee_id' ), 'tix_first_name', true );
 	}
 
 	/**
 	 * Notify shortcode: returns the attendee last name.
 	 */
 	function notify_shortcode_last_name( $atts ) {
-		if ( $this->notify_shortcodes_attendee_id )
-			return get_post_meta( $this->notify_shortcodes_attendee_id, 'tix_last_name', true );
+		if ( $this->tmp( 'attendee_id' ) )
+			return get_post_meta( $this->tmp( 'attendee_id' ), 'tix_last_name', true );
 	}
 
 	/**
 	 * Notify shortcode: returns the attendee e-mail address.
 	 */
 	function notify_shortcode_email( $atts ) {
-		if ( $this->notify_shortcodes_attendee_id )
-			return get_post_meta( $this->notify_shortcodes_attendee_id, 'tix_email', true );
+		if ( $this->tmp( 'attendee_id' ) )
+			return get_post_meta( $this->tmp( 'attendee_id' ), 'tix_email', true );
 	}
 
 	/**
 	 * Notify shortcode: returns the attendee edit url
 	 */
 	function notify_shortcode_ticket_url( $atts ) {
-		if ( ! $this->notify_shortcodes_attendee_id )
+		if ( ! $this->tmp( 'attendee_id' ) )
 			return;
 
-		$edit_token = get_post_meta( $this->notify_shortcodes_attendee_id, 'tix_edit_token', true );
-		return $this->get_edit_attendee_link( $this->notify_shortcodes_attendee_id, $edit_token );
+		$edit_token = get_post_meta( $this->tmp( 'attendee_id' ), 'tix_edit_token', true );
+		return $this->get_edit_attendee_link( $this->tmp( 'attendee_id' ), $edit_token );
 	}
 
 	/**
@@ -995,6 +1033,10 @@ class CampTix_Plugin {
 			'refund_all_enabled' => false,
 			'archived' => false,
 			'payment_methods' => array(),
+
+			'email_template_single_purchase' => __( "Hi there!\n\nYou have purchased the following ticket:\n\n[receipt]\n\nYou can edit the information for the purchased ticket at any time before the event, by visiting the following link:\n\n[ticket_url]\n\nLet us know if you have any questions!", 'camptix' ),
+			'email_template_multiple_purchase' => __( "Hi there!\n\nThank you so much for purchasing a ticket and hope to see you soon at our event. You can edit your information at any time before the event, by visiting the following link:\n\n[ticket_url]\n\nLet us know if you have any questions!", 'camptix' ),
+			'email_template_multiple_purchase_receipt' => __( "Hi there!\n\nYou have purchased the following tickets:\n\n[receipt]\n\nYou can edit the information for all the purchased tickets at any time before the event, by visiting the following link:\n\n[ticket_url]\n\nLet us know if you have any questions!", 'camptix' ),
 		) );
 	}
 
@@ -1335,6 +1377,15 @@ class CampTix_Plugin {
 					$payment_method_obj->payment_settings_fields();
 				}
 				break;
+			case 'email-templates':
+				add_settings_section( 'general', __( 'E-mail Templates', 'camptix' ), array( $this, 'menu_setup_section_email_templates' ), 'camptix_options' );
+				$this->add_settings_field_helper( 'email_template_single_purchase', __( 'Single purchase', 'camptix' ), 'field_textarea' );
+				$this->add_settings_field_helper( 'email_template_multiple_purchase', __( 'Multiple purchase', 'camptix' ), 'field_textarea' );
+				$this->add_settings_field_helper( 'email_template_multiple_purchase_receipt', __( 'Multiple purchase (receipt)', 'camptix' ), 'field_textarea' );
+
+				// Add a reset templates button
+				add_action( 'camptix_setup_buttons', array( $this, 'setup_buttons_reset_templates' ) );
+				break;
 			case 'beta':
 
 				if ( ! $this->beta_features_enabled )
@@ -1365,6 +1416,10 @@ class CampTix_Plugin {
 		echo '<p>' . __( 'Beta features are things that are being worked on in CampTix, but are not quite finished yet. You can try them out, but we do not recommend doing that in a live environment on a real event. If you have any kind of feedback on any of the beta features, please let us know.', 'camptix' ) . '</p>';
 	}
 
+	function menu_setup_section_email_templates() {
+		echo '<p>' . __( 'Customize your confirmation e-mail templates.', 'camptix' ) . '</p>';
+	}
+
 	function menu_setup_section_general() {
 		echo '<p>' . __( 'General configuration.', 'camptix' ) . '</p>';
 	}
@@ -1378,13 +1433,17 @@ class CampTix_Plugin {
 
 		$args = array(
 			'name' => sprintf( 'camptix_options[%s]', $key ),
-			'value' => $this->options[$key],
+			'value' => ( ! empty( $this->options[ $key ] ) ) ? $this->options[ $key ] : null,
 		);
 
 		if ( $description )
 			$args['description'] = $description;
 
 		add_settings_field( $key, $title, array( $this, $callback_method ), 'camptix_options', $section, $args );
+	}
+
+	function setup_buttons_reset_templates() {
+		submit_button( __( 'Reset Default', 'camptix' ), 'secondary', 'tix-reset-templates', false );
 	}
 
 	/**
@@ -1422,6 +1481,22 @@ class CampTix_Plugin {
 					$output['payment_methods'][ $key ] = (bool) $input['payment_methods'][ $key ];
 		}
 
+		// E-mail templates
+		$email_templates = array(
+			'single_purchase',
+			'multiple_purchase',
+			'multiple_purchase_receipt',
+		);
+
+		foreach ( $email_templates as $template )
+			if ( isset( $input[ 'email_template_' . $template ] ) )
+				$output[ 'email_template_' . $template ] = $input[ 'email_template_' . $template ];
+
+		// If the Reset Defaults button was hit
+		if ( isset( $_POST['tix-reset-templates'] ) )
+			foreach ( $email_templates as $template )
+				unset( $output[ 'email_template_' . $template ] );
+
 		$current_user = wp_get_current_user();
 		$log_data = array(
 			'old'      => $this->options,
@@ -1450,6 +1525,12 @@ class CampTix_Plugin {
 	function field_text( $args ) {
 		?>
 		<input type="text" name="<?php echo esc_attr( $args['name'] ); ?>" value="<?php echo esc_attr( $args['value'] ); ?>" class="regular-text" />
+		<?php
+	}
+
+	function field_textarea( $args ) {
+		?>
+		<textarea class="large-text" rows="5" name="<?php echo esc_attr( $args['name'] ); ?>"><?php echo esc_textarea( $args['value'] ); ?></textarea>
 		<?php
 	}
 
@@ -1521,37 +1602,101 @@ class CampTix_Plugin {
 	 */
 	function get_currencies() {
 		return apply_filters( 'camptix_currencies', array(
-			'USD' => array(
-				'label' => __( 'U.S. Dollar', 'camptix' ),
+			'AUD' => array(
+				'label' => __( 'Australian Dollar', 'camptix' ),
+				'format' => '$ %s',
+			),
+			'CAD' => array(
+				'label' => __( 'Canadian Dollar', 'camptix' ),
 				'format' => '$ %s',
 			),
 			'EUR' => array(
 				'label' => __( 'Euro', 'camptix' ),
 				'format' => '€ %s',
 			),
-			'CAD' => array(
-				'label' => __( 'Canadian Dollar', 'camptix' ),
-				'format' => 'CAD %s',
-			),
-			'NOK' => array(
-				'label' => __( 'Norwegian Krone', 'camptix' ),
-				'format' => 'NOK %s',
-			),
-			'PLN' => array(
-				'label' => __( 'Polish Zloty', 'camptix' ),
-				'format' => 'PLN %s',
-			),
-			'JPY' => array(
-				'label' => __( 'Japanese Yen', 'camptix' ),
-				'format' => 'JPY %s',
-			),
 			'GBP' => array(
 				'label' => __( 'Pound Sterling', 'camptix' ),
 				'format' => '£ %s',
 			),
+			'JPY' => array(
+				'label' => __( 'Japanese Yen', 'camptix' ),
+				'format' => '&#165; %s',
+			),
+			'USD' => array(
+				'label' => __( 'U.S. Dollar', 'camptix' ),
+				'format' => '$ %s',
+			),
+			'NZD' => array(
+				'label' => __( 'N.Z. Dollar', 'camptix' ),
+				'format' => '$ %s',
+			),
+			'CHF' => array(
+				'label' => __( 'Swiss Franc', 'camptix' ),
+				'format' => '%s Fr',
+			),
+			'HKD' => array(
+				'label' => __( 'Hong Kong Dollar', 'camptix' ),
+				'format' => '$ %s',
+			),
+			'SGD' => array(
+				'label' => __( 'Singapore Dollar', 'camptix' ),
+				'format' => '$ %s',
+			),
+			'SEK' => array(
+				'label' => __( 'Swedish Krona', 'camptix' ),
+				'format' => '%s &#107;&#114;',
+			),
+			'DKK' => array(
+				'label' => __( 'Danish Krone', 'camptix' ),
+				'format' => '%s &#107;&#114;',
+			),
+			'PLN' => array(
+				'label' => __( 'Polish Zloty', 'camptix' ),
+				'format' => '%s &#122;&#322;',
+			),
+			'NOK' => array(
+				'label' => __( 'Norwegian Krone', 'camptix' ),
+				'format' => '%s &#107;&#114;',
+			),
+			'HUF' => array(
+				'label' => __( 'Hungarian Forint', 'camptix' ),
+				'format' => '%s &#70;&#116;',
+			),
+			'CZK' => array(
+				'label' => __( 'Czech Koruna', 'camptix' ),
+				'format' => '%s &#75;&#269;',
+			),
 			'ILS' => array(
 				'label' => __( 'Israeli New Sheqel', 'camptix' ),
 				'format' => '&#8362; %s',
+			),
+			'MXN' => array(
+				'label' => __( 'Mexican Peso', 'camptix' ),
+				'format' => '$ %s',
+			),
+			'BRL' => array(
+				'label' => __( 'Brazilian Real', 'camptix' ),
+				'format' => '&#82;&#36; %s',
+			),
+			'MYR' => array(
+				'label' => __( 'Malaysian Ringgit', 'camptix' ),
+				'format' => '&#82;&#77; %s',
+			),
+			'PHP' => array(
+				'label' => __( 'Philippine Peso', 'camptix' ),
+				'format' => '&#8369; %s',
+			),
+			'TWD' => array(
+				'label' => __( 'New Taiwan Dollar', 'camptix' ),
+				'format' => '&#78;&#84;&#36; %s',
+			),
+			'THB' => array(
+				'label' => __( 'Thai Baht', 'camptix' ),
+				'format' => '&#3647; %s',
+			),
+			'TRY' => array(
+				'label' => __( 'Turkish Lira', 'camptix' ),
+				'format' => 'TRY %s', // Unicode is &#8378; but this doesn't seem to be widely supported yet (introduced Sep 2012)
 			),
 		) );
 	}
@@ -1653,8 +1798,11 @@ class CampTix_Plugin {
 				<?php
 					settings_fields( 'camptix_options' );
 					do_settings_sections( 'camptix_options' );
-					submit_button();
 				?>
+				<p class="submit">
+					<?php submit_button( '', 'primary', 'submit', false ); ?>
+					<?php do_action( 'camptix_setup_buttons' ); ?>
+				</p>
 			</form>
 			<?php if ( $this->debug ) : ?>
 			<pre><?php
@@ -1686,6 +1834,7 @@ class CampTix_Plugin {
 		$sections = array(
 			'general' => __( 'General', 'camptix' ),
 			'payment' => __( 'Payment', 'camptix' ),
+			'email-templates' => __( 'E-mail Templates', 'camptix' ),
 		);
 
 		if ( $this->beta_features_enabled )
@@ -2535,12 +2684,12 @@ class CampTix_Plugin {
 						) );
 
 						if ( $attendees_ids )
-							$this->notify_shortcodes_attendee_id = array_shift( $attendees_ids );
+							$this->tmp( 'attendee_id', array_shift( $attendees_ids ) );
 
 						$subject = do_shortcode( $form_data['subject'] );
 						$content = do_shortcode( $form_data['body'] );
 
-						unset( $this->notify_shortcodes_attendee_id );
+						$this->tmp( 'attendee_id', false );
 					?>
 					<tr>
 						<th scope="row">Preview</th>
@@ -3336,6 +3485,7 @@ class CampTix_Plugin {
 			<!-- Add Questions to the List -->
 			<script>
 			(function($){
+			$(document).trigger( 'load-questions.camptix' );
 			<?php foreach ( $questions as $question ) : ?>
 				camptix.questions.add( new camptix.models.Question( {
 					post_id: <?php echo esc_js( $question->ID ); ?>,
@@ -4660,7 +4810,7 @@ class CampTix_Plugin {
 			$this->notice( __( 'Please note that the payment for this ticket is still pending.', 'camptix' ) );
 
 		$ticket = get_post( $ticket_id );
-		$questions = $this->get_sorted_questions_new( $ticket->ID );
+		$questions = $this->get_sorted_questions( $ticket->ID );
 		$answers = (array) get_post_meta( $attendee->ID, 'tix_questions', true );
 		$ticket_info = array(
 			'first_name' => get_post_meta( $attendee->ID, 'tix_first_name', true ),
@@ -5392,7 +5542,7 @@ class CampTix_Plugin {
 
 			$answers = array();
 			if ( isset( $_POST['tix_attendee_questions'][$i] ) ) {
-				$questions = $this->get_sorted_questions_new( $ticket->ID );
+				$questions = $this->get_sorted_questions( $ticket->ID );
 
 				foreach ( $questions as $question ) {
 					if ( isset( $_POST['tix_attendee_questions'][$i][$question->ID] ) )
@@ -5895,6 +6045,8 @@ class CampTix_Plugin {
 		if ( ! $attendees )
 			return;
 
+		do_action( 'camptix_init_email_templates_shortcodes' );
+
 		$access_token = get_post_meta( $attendees[0]->ID, 'tix_access_token', true );
 		$receipt_email = get_post_meta( $attendees[0]->ID, 'tix_receipt_email', true );
 		$order = get_post_meta( $attendees[0]->ID, 'tix_order', true );
@@ -5911,6 +6063,9 @@ class CampTix_Plugin {
 		$receipt_content .= sprintf( "* " . __( 'Total: %s', 'camptix' ), $this->append_currency( $order['total'], false ) );
 		$signature = apply_filters( 'camptix_ticket_email_signature', __( 'Let us know if you have any questions!', 'camptix' ) );
 
+		// Set the tmp receipt for shortcodes use.
+		$this->tmp( 'receipt', $receipt_content );
+
 		/**
 		 * If there's more than one attendee we should e-mail a separate ticket to each attendee,
 		 * but only if the payment was from draft to completed or pending.For non-draft to ... tickets
@@ -5922,7 +6077,11 @@ class CampTix_Plugin {
 				$edit_token = get_post_meta( $attendee->ID, 'tix_edit_token', true );
 				$edit_link = $this->get_edit_attendee_link( $attendee->ID, $edit_token );
 
-				$content = sprintf( __( "Hi there!\n\nThank you so much for purchasing a ticket and hope to see you soon at our event. You can edit your information at any time before the event, by visiting the following link:\n\n%s\n\n%s", 'camptix' ), $edit_link, $signature );
+				$this->tmp( 'attendee_id', $attendee->ID );
+				$this->tmp( 'ticket_url', $edit_link );
+
+				$content = do_shortcode( $this->options['email_template_multiple_purchase'] );
+
 				$subject = sprintf( __( "Your Ticket to %s", 'camptix' ), $this->options['event_name'] );
 
 				$this->log( sprintf( 'Sent ticket e-mail to %s and receipt to %s.', $attendee_email, $receipt_email ), $attendee->ID );
@@ -5936,9 +6095,20 @@ class CampTix_Plugin {
 		 * Let's now e-mail the receipt, directly after a purchas has been made.
 		 */
 		if ( $from_status == 'draft' && ( in_array( $to_status, array( 'publish', 'pending' ) ) ) ) {
-			$edit_link = $this->get_access_tickets_link( $access_token );
 
+			// Fetch the attendee who's supposed to get the receipt.
+			$receipt_attendee = $attendees[0]; // default to the first one.
+			foreach ( $attendees as $attendee ) {
+				if ( $receipt_email == get_post_meta( $attendee->ID, 'tix_email', true ) ) {
+					$receipt_attendee = $attendee;
+					break;
+				}
+			}
+
+			$edit_link = $this->get_access_tickets_link( $access_token );
 			$payment_status = '';
+			$this->tmp( 'ticket_url', $edit_link );
+			$this->tmp( 'attendee_id', $receipt_attendee->ID );
 
 			// If the status is pending, let the buyer know about that in the receipt.
 			if ( 'pending' == $to_status )
@@ -5946,26 +6116,29 @@ class CampTix_Plugin {
 
 			if ( count( $attendees ) == 1 ) {
 
-				$content = sprintf( __( "Hey there!\n\nYou have purchased the following ticket:\n\n%s\n\nYou can edit the information for the purchased ticket at any time before the event, by visiting the following link:\n\n%s\n\n%s%s", 'camptix' ), $receipt_content, $edit_link, $payment_status, $signature );
+				$content = do_shortcode( $this->options['email_template_single_purchase'] );
+
 				$subject = sprintf( __( "Your Ticket to %s", 'camptix' ), $this->options['event_name'] );
 
-				$this->log( sprintf( 'Sent a ticket and receipt to %s.', $receipt_email ), $attendees[0]->ID );
+				$this->log( sprintf( 'Sent a ticket and receipt to %s.', $receipt_email ), $receipt_attendee->ID );
 				$this->wp_mail( $receipt_email, $subject, $content );
 
-				do_action( 'camptix_ticket_emailed', $attendees[0]->ID );
+				do_action( 'camptix_ticket_emailed', $receipt_attendee->ID );
 
 			} elseif ( count( $attendees ) > 1 ) {
 
-				$content = sprintf( __( "Hey there!\n\nYou have purchased the following tickets:\n\n%s\n\nYou can edit the information for all the purchased tickets at any time before the event, by visiting the following link:\n\n%s\n\n%s%s", 'camptix' ), $receipt_content, $edit_link, $payment_status, $signature );
+				$content = do_shortcode( $this->options['email_template_multiple_purchase_receipt'] );
+
 				$subject = sprintf( __( "Your Tickets to %s", 'camptix' ), $this->options['event_name'] );
 
-				$this->log( sprintf( 'Sent a receipt to %s.', $receipt_email ), $attendees[0]->ID );
+				$this->log( sprintf( 'Sent a receipt to %s.', $receipt_email ), $receipt_attendee->ID );
 				$this->wp_mail( $receipt_email, $subject, $content );
 			}
 		}
 
 		/**
 		 * This is mainly for notifications that would set the status after an IPN.
+		 * @todo E-mail Templates
 		 */
 		if ( $from_status == 'pending' && $to_status == 'publish' ) {
 			$edit_link = $this->get_access_tickets_link( $access_token );
@@ -5983,6 +6156,10 @@ class CampTix_Plugin {
 			$this->log( sprintf( 'Sending failed e-mail notification after IPN to %s.', $receipt_email ), $attendees[0]->ID );
 			$this->wp_mail( $receipt_email, $subject, $content );
 		}
+
+		$this->tmp( 'attendee_id', false );
+		$this->tmp( 'ticket_url', false );
+		$this->tmp( 'receipt', false );
 	}
 
 	function redirect_with_error_flags( $query_args = array() ) {
@@ -6151,7 +6328,7 @@ class CampTix_Plugin {
 		if ( is_email( get_option( 'admin_email' ) ) && is_array( $headers ) )
 			$headers[] = sprintf( 'From: %s <%s>', $this->options['event_name'], get_option( 'admin_email' ) );
 
-		$this->log( sprintf( 'Sent e-mail to %s.', $to ), null, array( 'subject' => $subject, 'message' => $message ) );
+		$this->log( sprintf( 'Sent e-mail to %s.', $to ), null, array( 'subject' => $subject, 'message' => $message ), 'email' );
 		return wp_mail( $to, $subject, $message, $headers, $attachments );
 	}
 
@@ -6210,6 +6387,26 @@ class CampTix_Plugin {
 		}
 
 		$this->addons[] = $classname;
+	}
+
+	/**
+	 * Temporary storage (non-persistent)
+	 *
+	 * Use this fuction to access the CampTix temporary storage for things like attendee_id
+	 * for notify shortcodes, and receipt for e-mail templates, etc. You can also use it to
+	 * store your own stuff, but don't forget to cleanup when you're done.
+	 *
+	 * @param $key string The key to access/store the value with.
+	 * @param $value mixed An optional value when storing things.
+	 */
+	public function tmp( $key, $value = null ) {
+		if ( null !== $value )
+			$this->tmp[ $key ] = $value;
+
+		if ( isset( $this->tmp[ $key ] ) )
+			$value = $this->tmp[ $key ];
+
+		return $value;
 	}
 }
 
