@@ -28,7 +28,7 @@ Feel free to post your feature requests, issues and pull requests to [CampTix on
 1. Download and extract CampTix in your `wp-content/plugins` directory
 1. Activate the plugin through the Plugins menu in WordPress
 1. Go to Tickets - Setup to configure your event settings and payment methods
-1. Creat a ticket or two, place the `[camptix]` shortcode on a Page
+1. Create a ticket or two, place the `[camptix]` shortcode on a Page
 1. Start selling!
 
 For more information, visit the [Getting Started](https://github.com/automattic/camptix/wiki "Getting Started") guide on CampTix Wiki.
@@ -45,7 +45,7 @@ For more information, visit the [Getting Started](https://github.com/automattic/
 
 == Changelog ==
 
-= 1.3.1
+= 1.3.1 =
 * Better escaping and sanitization
 * Better error messages during failed payments
 * Fixed a bug where the shortcode would display in plain text

@@ -48,6 +48,7 @@ class CampTix_Plugin {
 	const PAYMENT_STATUS_FAILED = 4;
 	const PAYMENT_STATUS_TIMEOUT = 5;
 	const PAYMENT_STATUS_REFUNDED = 6;
+	const PAYMENT_STATUS_REFUND_FAILED = 7;
 
 	/**
 	 * Fired as soon as this file is loaded, don't do anything
@@ -1636,7 +1637,7 @@ class CampTix_Plugin {
 			),
 			'JPY' => array(
 				'label' => __( 'Japanese Yen', 'camptix' ),
-				'format' => '&#165; %s',
+				'format' => '¥ %s',
 			),
 			'USD' => array(
 				'label' => __( 'U.S. Dollar', 'camptix' ),
@@ -1660,31 +1661,31 @@ class CampTix_Plugin {
 			),
 			'SEK' => array(
 				'label' => __( 'Swedish Krona', 'camptix' ),
-				'format' => '%s &#107;&#114;',
+				'format' => '%s kr',
 			),
 			'DKK' => array(
 				'label' => __( 'Danish Krone', 'camptix' ),
-				'format' => '%s &#107;&#114;',
+				'format' => '%s kr',
 			),
 			'PLN' => array(
 				'label' => __( 'Polish Zloty', 'camptix' ),
-				'format' => '%s &#122;&#322;',
+				'format' => '%s Zł',
 			),
 			'NOK' => array(
 				'label' => __( 'Norwegian Krone', 'camptix' ),
-				'format' => '%s &#107;&#114;',
+				'format' => '%s kr',
 			),
 			'HUF' => array(
 				'label' => __( 'Hungarian Forint', 'camptix' ),
-				'format' => '%s &#70;&#116;',
+				'format' => '%s FT',
 			),
 			'CZK' => array(
 				'label' => __( 'Czech Koruna', 'camptix' ),
-				'format' => '%s &#75;&#269;',
+				'format' => '%s Kč',
 			),
 			'ILS' => array(
 				'label' => __( 'Israeli New Sheqel', 'camptix' ),
-				'format' => '&#8362; %s',
+				'format' => '₪ %s',
 			),
 			'MXN' => array(
 				'label' => __( 'Mexican Peso', 'camptix' ),
@@ -1692,23 +1693,23 @@ class CampTix_Plugin {
 			),
 			'BRL' => array(
 				'label' => __( 'Brazilian Real', 'camptix' ),
-				'format' => '&#82;&#36; %s',
+				'format' => 'R$ %s',
 			),
 			'MYR' => array(
 				'label' => __( 'Malaysian Ringgit', 'camptix' ),
-				'format' => '&#82;&#77; %s',
+				'format' => 'RM %s',
 			),
 			'PHP' => array(
 				'label' => __( 'Philippine Peso', 'camptix' ),
-				'format' => '&#8369; %s',
+				'format' => '₱ %s',
 			),
 			'TWD' => array(
 				'label' => __( 'New Taiwan Dollar', 'camptix' ),
-				'format' => '&#78;&#84;&#36; %s',
+				'format' => 'NT$ %s',
 			),
 			'THB' => array(
 				'label' => __( 'Thai Baht', 'camptix' ),
-				'format' => '&#3647; %s',
+				'format' => '฿ %s',
 			),
 			'TRY' => array(
 				'label' => __( 'Turkish Lira', 'camptix' ),
@@ -2772,6 +2773,9 @@ class CampTix_Plugin {
 
 		if ( get_option( 'camptix_doing_refunds', false ) )
 			return $this->menu_tools_refund_busy();
+
+		// @todo when fixing/refactoring this, add a check to see if any of the enabled payment modules support refunding all transactions
+			// also add a similar check for each individual transaction that gets refunded, since some transactions could be from a module that supports refunds, and some from one that doesn't
 		?>
 		<form method="post" action="<?php echo esc_url( add_query_arg( 'tix_refund_all', 1 ) ); ?>">
 			<table class="form-table">
@@ -2909,7 +2913,7 @@ class CampTix_Plugin {
 		}
 
 		foreach ( $attendees as $attendee ) {
-			// If another cron instace has this, or same txn has been refunded.
+			// If another cron instance has this, or same txn has been refunded.
 			if ( ! get_post_meta( $attendee->ID, 'tix_pending_refund', true ) )
 				continue;
 
@@ -4956,8 +4960,6 @@ class CampTix_Plugin {
 	function form_refund_request() {
 		global $post;
 
-		die( 'needs implementation' );
-
 		// Clean things up before and after the shortcode.
 		$post->post_content = $this->shortcode_str;
 
@@ -5004,10 +5006,14 @@ class CampTix_Plugin {
 		$tickets = array();
 
 		foreach ( $attendees as $attendee ) {
-			$txn_id = get_post_meta( $attendee->ID, 'tix_paypal_transaction_id', true );
+			$txn_id = get_post_meta( $attendee->ID, 'tix_transaction_id', true );
 			if ( $txn_id ) {
-				$transactions[$txn_id] = get_post_meta( $attendee->ID, 'tix_paypal_transaction_details', true );
-				$order_total = get_post_meta( $attendee->ID, 'tix_order_total', true );
+				$transactions[ $txn_id ]                   = get_post_meta( $attendee->ID, 'tix_transaction_details', true );
+				$transactions[ $txn_id ]['transaction_id'] = $txn_id;
+				$transactions[ $txn_id ]['payment_amount'] = get_post_meta( $attendee->ID, 'tix_order_total', true );
+				$transactions[ $txn_id ]['receipt_email']  = get_post_meta( $attendee->ID, 'tix_receipt_email', true );
+				$transactions[ $txn_id ]['payment_method'] = get_post_meta( $attendee->ID, 'tix_payment_method', true );
+				$transactions[ $txn_id ]['payment_token']  = get_post_meta( $attendee->ID, 'tix_payment_token', true );
 			}
 			$ticket_id = get_post_meta( $attendee->ID, 'tix_ticket_id', true );
 
@@ -5015,17 +5021,16 @@ class CampTix_Plugin {
 				$tickets[$ticket_id]++;
 			else
 				$tickets[$ticket_id] = 1;
-
 		}
 
-		if ( count( $transactions ) != 1 || $order_total <= 0 ) {
+		if ( count( $transactions ) != 1 || $transactions[ $txn_id ]['payment_amount'] <= 0 ) {
 			$this->error_flags['cannot_refund'] = true;
 			$this->redirect_with_error_flags();
 			die();
 		}
 
 		$transaction = array_shift( $transactions );
-		if ( ! isset( $transaction['EMAIL'], $transaction['TRANSACTIONID'], $transaction['PAYMENTSTATUS'], $transaction['AMT'], $transaction['CURRENCYCODE'] ) ) {
+		if ( ! $transaction['receipt_email'] || ! $transaction['transaction_id'] || ! $transaction['payment_amount'] ) {
 			$this->error_flags['cannot_refund'] = true;
 			$this->redirect_with_error_flags();
 			die();
@@ -5041,24 +5046,28 @@ class CampTix_Plugin {
 				$this->error( __( 'You have to agree to the terms to request a refund.', 'camptix' ) );
 			} else {
 
-				$payload = array(
-					'METHOD' => 'RefundTransaction',
-					'TRANSACTIONID' => $transaction['TRANSACTIONID'],
-					'REFUNDTYPE' => 'Full',
-				);
+				$payment_method_obj = $this->get_payment_method_by_id( $transaction['payment_method'] );
 
-				$txn = wp_parse_args( wp_remote_retrieve_body( $this->paypal_request( $payload ) ) );
-				if ( isset( $txn['ACK'], $txn['REFUNDTRANSACTIONID'] ) && $txn['ACK'] == 'Success' ) {
-					$refund_txn_id = $txn['REFUNDTRANSACTIONID'];
+				// Bail if a payment method does not exist.
+				if ( ! $payment_method_obj ) {
+					$this->error_flags['cannot_refund'] = true;
+					$this->redirect_with_error_flags();
+					die();
+				}
+
+				/**
+				 * @todo: Better error messaging for misconfigured payment methods
+				 */
+
+				// Attempt to process the refund transaction
+				$result = $payment_method_obj->payment_refund( $transaction['payment_token'] );
+				if ( CampTix_Plugin::PAYMENT_STATUS_REFUNDED == $result ) {
 					foreach ( $attendees as $attendee ) {
-						$this->log( sprintf( 'Refunded %s by user request in %s.', $transaction['TRANSACTIONID'], $refund_txn_id ), $attendee->ID, $txn, 'refund' );
+						update_post_meta( $attendee->ID, 'tix_refund_reason', $reason );
 						$this->log( 'Refund reason attached with data.', $attendee->ID, $reason, 'refund' );
-						$attendee->post_status = 'refund';
-						wp_update_post( $attendee );
 					}
 
 					$this->info( __( 'Your tickets have been successfully refunded.', 'camptix' ) );
-					ob_end_clean();
 					return $this->form_refund_success();
 				} else {
 					$this->error( __( 'Can not refund the transaction at this time. Please try again later.', 'camptix' ) );
@@ -5083,11 +5092,11 @@ class CampTix_Plugin {
 						</tr>
 						<tr>
 							<td class="tix-left"><?php _e( 'E-mail', 'camptix' ); ?></td>
-							<td class="tix-right"><?php echo esc_html( $transaction['EMAIL'] ); ?></td>
+							<td class="tix-right"><?php echo esc_html( $transaction['receipt_email'] ); ?></td>
 						</tr>
 						<tr>
 							<td class="tix-left"><?php _e( 'Original Payment', 'camptix' ); ?></td>
-							<td class="tix-right"><?php printf( "%s %s", $transaction['CURRENCYCODE'], $transaction['AMT'] ); ?></td>
+							<td class="tix-right"><?php printf( "%s %s", $this->options['currency'], $transaction['payment_amount'] ); ?></td>
 						</tr>
 						<tr>
 							<td class="tix-left"><?php _e( 'Purchased Tickets', 'camptix' ); ?></td>
@@ -5099,7 +5108,7 @@ class CampTix_Plugin {
 						</tr>
 						<tr>
 							<td class="tix-left"><?php _e( 'Refund Amount', 'camptix' ); ?></td>
-							<td class="tix-right"><?php printf( "%s %s", $transaction['CURRENCYCODE'], $transaction['AMT'] ); ?></td>
+							<td class="tix-right"><?php printf( "%s %s", $this->options['currency'], $transaction['payment_amount'] ); ?></td>
 						</tr>
 						<tr>
 							<td class="tix-left"><?php _e( 'Refund Reason', 'camptix' ); ?></td>
@@ -5108,7 +5117,7 @@ class CampTix_Plugin {
 
 					</tbody>
 				</table>
-				<p class="tix-description"><?php _e( 'Refunds can take up to several days to process. All purchased tickets will be cancelled. Partial refunds and refunds to a different account that the original purchaser, are unavailable. You have to agree to these terms before requesting a refund.', 'camptix' ); ?></p>
+				<p class="tix-description"><?php _e( 'Refunds can take up to several days to process. All purchased tickets will be cancelled. Partial refunds and refunds to a different account than the original purchaser, are unavailable. You have to agree to these terms before requesting a refund.', 'camptix' ); ?></p>
 				<p class="tix-submit">
 					<label><input type="checkbox" name="tix_refund_request_confirmed" value="1"> <?php _e( 'I agree to the above terms', 'camptix' ); ?></label>
 					<input type="submit" value="<?php esc_attr_e( 'Send Request', 'camptix' ); ?>" />
@@ -5141,12 +5150,14 @@ class CampTix_Plugin {
 
 	/**
 	 * Return true if an attendee_id is refundable.
-	 * @todo implement
 	 */
 	function is_refundable( $attendee_id ) {
-		return false;
-
 		if ( ! $this->options['refunds_enabled'] )
+			return false;
+
+		$payment_method = get_post_meta( $attendee_id, 'tix_payment_method', true );
+		$payment_method_obj = $this->get_payment_method_by_id( $payment_method );
+		if ( ! $payment_method_obj || ! $payment_method_obj->supports_feature( 'refund-single' ) )
 			return false;
 
 		$today = date( 'Y-m-d' );
@@ -5159,7 +5170,7 @@ class CampTix_Plugin {
 			return false;
 
 		$attendee = get_post( $attendee_id );
-		if ( $attendee->post_status == 'publish' && (float) get_post_meta( $attendee->ID, 'tix_order_total', true ) > 0 && get_post_meta( $attendee->ID, 'tix_paypal_transaction_id', true ) )
+		if ( $attendee->post_status == 'publish' && (float) get_post_meta( $attendee->ID, 'tix_order_total', true ) > 0 && get_post_meta( $attendee->ID, 'tix_transaction_id', true ) )
 			return true;
 
 		return false;
@@ -5882,6 +5893,52 @@ class CampTix_Plugin {
 	}
 
 	/**
+	 * Get's a piece of post meta data associated with a payment token
+	 *
+	 * @param string $payment_token
+	 * @param string $field The name of the post meta field, e.g., 'tix_transaction_id'
+	 * @return mixed
+	 */
+	function get_post_meta_from_payment_token( $payment_token, $field ) {
+	 	$attendees = $this->get_attendees_from_payment_token( $payment_token );
+		if ( isset( $attendees[0]->ID ) )
+			$data = get_post_meta( $attendees[0]->ID, $field, true );
+		else
+			$data = false;
+
+		return $data;
+	}
+
+	/**
+	 * Retrieves the attendee associated with a given the payment token
+	 *
+	 * @param string $payment_token
+	 * @return array
+	 */
+	function get_attendees_from_payment_token( $payment_token ) {
+		$cache_key = md5( 'get_attendees_from_payment_token' . $payment_token );
+		$attendees = $this->tmp( $cache_key );
+
+		if ( null === $attendees ) {
+			$attendees = get_posts( array(
+				'post_type'      => 'tix_attendee',
+				'posts_per_page' => -1,
+				'post_status'    => array( 'draft', 'pending', 'publish', 'cancel', 'refund', 'failed' ),
+				'meta_query'     => array(
+					array(
+						'key'    => 'tix_payment_token',
+						'value'  => $payment_token,
+					)
+				),
+			) );
+
+			$this->tmp( $cache_key, $attendees );
+		}
+
+		return $attendees;
+	}
+
+	/**
 	 * Returns a payment method class object by id/key.
 	 */
 	function get_payment_method_by_id( $id ) {
@@ -5973,6 +6030,13 @@ class CampTix_Plugin {
 			if ( self::PAYMENT_STATUS_REFUNDED == $result ) {
 				$attendee->post_status = 'refund';
 				wp_update_post( $attendee );
+				update_post_meta( $attendee->ID, 'tix_refund_transaction_id', $data['refund_transaction_id'] );
+				update_post_meta( $attendee->ID, 'tix_refund_transaction_details', $data['refund_transaction_details'] );
+				$this->log( sprintf( 'Refunded %s by user request in %s.', $transaction_id, $data['refund_transaction_id'] ), $attendee->ID, $data, 'refund' );
+			}
+
+			if ( self::PAYMENT_STATUS_REFUND_FAILED == $result ) {
+				return $result;
 			}
 
 			$this->log( sprintf( 'Payment result for %s.', $transaction_id ), $attendee->ID, $data );
@@ -6051,8 +6115,7 @@ class CampTix_Plugin {
 				break;
 
 			case self::PAYMENT_STATUS_REFUNDED :
-				// @todo what do we do when a purchase is refunded?
-				die();
+				return $result;
 				break;
 
 			default:
@@ -6135,6 +6198,26 @@ class CampTix_Plugin {
 		}
 
 		/**
+		 * If an order with multiple attendees is refunded, let all of them know
+		 * Don't send one to the attendee who placed the order, though, because they'll get a separate notification
+		 */
+		if ( count( $attendees ) > 1 && 'publish' == $from_status && 'refund' == $to_status ) {
+			foreach ( $attendees as $attendee ) {
+				$attendee_email = get_post_meta( $attendee->ID, 'tix_email', true );
+
+				if ( $attendee_email != $receipt_email ) {
+					$subject = sprintf( __( "Your Refund for %s", 'camptix' ), $this->options['event_name'] );
+					$content = sprintf( __( "Hey there!\n\nYour ticket for %s has been refunded. If you change your mind and still wish to attend the event, feel free to purchase a new ticket using the following link:\n\n%s\n\nLet us know if you need any help!", 'camptix' ), $this->options['event_name'], $this->get_tickets_url() );
+
+					$this->log( sprintf( 'Sending refund e-mail notification to %s.', $attendee_email ), $attendees[0]->ID );
+					$this->wp_mail( $attendee_email, $subject, $content );
+
+					do_action( 'camptix_refund_emailed', $attendee->ID );
+				}
+			}
+		}
+
+		/**
 		 * Let's now e-mail the receipt, directly after a purchas has been made.
 		 */
 		if ( $from_status == 'draft' && ( in_array( $to_status, array( 'publish', 'pending' ) ) ) ) {
@@ -6197,6 +6280,14 @@ class CampTix_Plugin {
 			$content = sprintf( __( "Hey there!\n\nWe're so sorry, but it looks like your payment for %s has failed! Please check your payment transactions for more details. If you still wish to attend the event, feel free to purchase a new ticket using the following link:\n\n%s\n\nLet us know if you need any help!", 'camptix' ), $this->options['event_name'], $this->get_tickets_url() );
 
 			$this->log( sprintf( 'Sending failed e-mail notification after IPN to %s.', $receipt_email ), $attendees[0]->ID );
+			$this->wp_mail( $receipt_email, $subject, $content );
+		}
+
+		if ( $from_status == 'publish' && $to_status == 'refund' ) {
+			$subject = sprintf( __( "Your Refund for %s", 'camptix' ), $this->options['event_name'] );
+			$content = sprintf( __( "Hey there!\n\nYour refund for %s has been completed. If you change your mind and still wish to attend the event, feel free to purchase a new ticket using the following link:\n\n%s\n\nLet us know if you need any help!", 'camptix' ), $this->options['event_name'], $this->get_tickets_url() );
+
+			$this->log( sprintf( 'Sending refund e-mail notification to %s.', $receipt_email ), $attendees[0]->ID );
 			$this->wp_mail( $receipt_email, $subject, $content );
 		}
 

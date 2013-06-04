@@ -11,6 +11,10 @@ class CampTix_Payment_Method extends CampTix_Addon {
 	public $description = false;
 
 	public $supported_currencies = false;
+	public $supported_features = array(
+		'refund-single' => false,
+		'refund-all' => false,
+	);
 
 	function __construct() {
 		global $camptix;
@@ -38,6 +42,10 @@ class CampTix_Payment_Method extends CampTix_Addon {
 
 	function supports_currency( $currency ) {
 		return ( in_array( $currency, $this->supported_currencies ) );
+	}
+
+	function supports_feature( $feature ) {
+		return array_key_exists( $feature, $this->supported_features ) ? $this->supported_features[ $feature ] : false;
 	}
 
 	function _camptix_get_payment_method_by_id( $payment_method, $id ) {
@@ -82,6 +90,14 @@ class CampTix_Payment_Method extends CampTix_Addon {
 
 	function payment_checkout( $payment_token ) {
 		die( __FUNCTION__ . ' not implemented' );
+	}
+
+	function payment_refund( $payment_token ) {
+		global $camptix;
+		$refund_data = array();
+		$camptix->log( __FUNCTION__ . ' not implemented in payment module.', 0, null, 'refund' );
+
+		return $this->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_REFUND_FAILED, $refund_data );
 	}
 
 	function payment_settings_fields() {
