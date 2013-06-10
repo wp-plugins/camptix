@@ -168,7 +168,7 @@ class CampTix_Plugin {
 		add_filter( 'cron_schedules', array( $this, 'cron_schedules' ) );
 
 		add_action( 'tix_scheduled_every_ten_minutes', array( $this, 'send_emails_batch' ) );
-		// add_action( 'tix_scheduled_every_ten_minutes', array( $this, 'process_refund_all' ) );
+		add_action( 'tix_scheduled_every_ten_minutes', array( $this, 'process_refund_all' ) );
 
 		add_action( 'tix_scheduled_daily', array( $this, 'review_timeout_payments' ) );
 
@@ -2794,8 +2794,9 @@ class CampTix_Plugin {
 		if ( get_option( 'camptix_doing_refunds', false ) )
 			return $this->menu_tools_refund_busy();
 
-		// @todo when fixing/refactoring this, add a check to see if any of the enabled payment modules support refunding all transactions
-			// also add a similar check for each individual transaction that gets refunded, since some transactions could be from a module that supports refunds, and some from one that doesn't
+		if ( ! $this->payment_modules_support_refund_all() )
+			return $this->menu_tools_refund_unavailable();
+
 		?>
 		<form method="post" action="<?php echo esc_url( add_query_arg( 'tix_refund_all', 1 ) ); ?>">
 			<table class="form-table">
@@ -2828,6 +2829,23 @@ class CampTix_Plugin {
 		if ( ! current_user_can( $this->caps['manage_tools'] ) || 'refund' != $this->get_tools_section() )
 			return;
 
+		// Display results of completed refund-all job
+		$total_results = get_option( 'camptix_refund_all_results' );
+		if ( isset( $total_results['status'] ) && 'completed' == $total_results['status'] ) {
+			add_settings_error(
+				'camptix',
+				'none',
+				sprintf(
+					__( 'CampTix has finished attempting to refund all transactions. The results were:<br /><br /> &bull;Succeeded: %s<br /> &bull;Failed: %s', 'camptix' ),
+					$total_results['succeeded'],
+					$total_results['failed']
+				),
+				'updated'
+			);	// not using proper <p> and <ul> markup because settings_errors() forces the entire message inside a <p>, which would be invalid
+			delete_option( 'camptix_refund_all_results' );
+		}
+
+		// Process form submission
 		if ( ! isset( $_POST['tix_refund_all_submit'] ) )
 			return;
 
@@ -2851,6 +2869,7 @@ class CampTix_Plugin {
 		$current_user = wp_get_current_user();
 		$this->log( sprintf( 'Setting all transactions to refund, thanks %s.', $current_user->user_login ), 0, null, 'refund' );
 		update_option( 'camptix_doing_refunds', true );
+		update_option( 'camptix_refund_all_results', array( 'status' => 'pending', 'succeeded' => 0, 'failed' => 0 ) );
 
 		$count = 0;
 		$paged = 1;
@@ -2898,20 +2917,51 @@ class CampTix_Plugin {
 		?>
 		<p><?php printf( __( 'A refund job is in progress, with %d attendees left in the queue. Next run in %d seconds.', 'camptix' ), $found_posts, wp_next_scheduled( 'tix_scheduled_every_ten_minutes' ) - time() ); ?></p>
 		<?php
+		// @todo sometimes the time returned is a negative value, then fixes next load
+		// @todo still says refund job in progress every with 0 attendees left. then clears next run. probably b/c last batch doesn't check to see if it's the last one
+	}
+
+	/*
+	 * Returns true if at least one of the enabled payment modules supports refunding all tickets
+	 */
+	function payment_modules_support_refund_all() {
+		$supported = false;
+		$payment_methods = $this->get_enabled_payment_methods();
+
+		if ( $payment_methods ) {
+			foreach ( $payment_methods as $key => $name ) {
+				$method = $this->get_payment_method_by_id( $key );
+
+				if ( $method && $method->supports_feature( 'refund-all' ) ) {		// test off and on. not working right now
+					$supported = true;
+					break;
+				}
+			}
+		}
+
+		return $supported;
+	}
+
+	/**
+	 * Runs on Refund tab if none of the current payment modules support refunding all tickets
+	 */
+	function menu_tools_refund_unavailable() {
+		?>
+		<p><?php echo __( 'None of the enabled payment modules support refunding all tickets.', 'camptix' ); ?></p>
+		<?php
 	}
 
 	/**
 	 * Runs by WP_Cron, refunds attendees set to refund.
-	 * @todo do :)
 	 */
 	function process_refund_all() {
-		die( 'needs implementation' );
 		if ( $this->options['archived'] )
 			return;
 
 		if ( ! get_option( 'camptix_doing_refunds', false ) )
 			return;
 
+		$total_results = get_option( 'camptix_refund_all_results' );
 		$attendees = get_posts( array(
 			'post_type' => 'tix_attendee',
 			'posts_per_page' => 50,
@@ -2929,6 +2979,7 @@ class CampTix_Plugin {
 
 		if ( ! $attendees ) {
 			$this->log( 'Refund all job complete.', 0, null, 'refund' );
+			$total_results['status'] = 'completed';
 			delete_option( 'camptix_doing_refunds' );
 		}
 
@@ -2936,12 +2987,9 @@ class CampTix_Plugin {
 			// If another cron instance has this, or same txn has been refunded.
 			if ( ! get_post_meta( $attendee->ID, 'tix_pending_refund', true ) )
 				continue;
-
 			delete_post_meta( $attendee->ID, 'tix_pending_refund' );
 			$transaction_id = get_post_meta( $attendee->ID, 'tix_transaction_id', true );
-
 			if ( $transaction_id && ! empty( $transaction_id ) && trim( $transaction_id ) ) {
-
 				// Related attendees have the same transaction id, we'll use this query to find them.
 				$rel_attendees_query = array(
 					'post_type' => 'tix_attendee',
@@ -2964,37 +3012,53 @@ class CampTix_Plugin {
 					),
 				);
 
-				$payload = array(
-					'METHOD' => 'RefundTransaction',
-					'TRANSACTIONID' => $transaction_id,
-					'REFUNDTYPE' => 'Full',
-				);
+				$payment_method = get_post_meta( $attendee->ID, 'tix_payment_method', true );
+				$payment_method_obj = $this->get_payment_method_by_id( $payment_method );
+				// Bail if a payment method does not exist.
+				if ( ! $payment_method_obj ) {
+					$this->log( "Couldn't instantiate payment module for attendee during refund-all batch.", $attendee->ID, null, 'refund' );
+					$total_results['failed']++;
+					continue;
+				}
 
-				// Tell PayPal to refund our transaction.
-				$txn = wp_parse_args( wp_remote_retrieve_body( $this->paypal_request( $payload ) ) );
-				if ( isset( $txn['ACK'], $txn['REFUNDTRANSACTIONID'] ) && $txn['ACK'] == 'Success' ) {
-					$this->log( sprintf( 'Refunded transaction %s.', $transaction_id ), $attendee->ID, $txn, 'refund' );
+				// Attempt to process the refund transaction
+				$payment_token = get_post_meta( $attendee->ID, 'tix_payment_token', true );
+				if ( ! $payment_token ) {
+					$this->log( "Invalid payment token for attendee during refund-all batch.", $attendee->ID, $payment_token, 'refund' );
+					$total_results['failed']++;
+					continue;
+				}
+
+				$result = $payment_method_obj->send_refund_request( $payment_token );
+
+				if ( CampTix_Plugin::PAYMENT_STATUS_REFUNDED == $result['status'] ) {
+					$this->log( sprintf( 'Refunded transaction %s.', $transaction_id ), $attendee->ID, $result, 'refund' );
 					$attendee->post_status = 'refund';
 					wp_update_post( $attendee );
+					update_post_meta( $attendee->ID, 'tix_refund_transaction_id', $result['refund_transaction_id'] );
+					update_post_meta( $attendee->ID, 'tix_refund_transaction_details', $result['refund_transaction_details'] );
+					$total_results['succeeded']++;
 
 					// Remove refund flag and set status to refunded for related attendees.
 					while ( $rel_attendees = get_posts( $rel_attendees_query ) ) {
 						foreach ( $rel_attendees as $rel_attendee ) {
-							$this->log( sprintf( 'Refunded transaction %s.', $transaction_id ), $rel_attendee->ID, $txn, 'refund' );
+							$this->log( sprintf( 'Refunded transaction %s.', $transaction_id ), $rel_attendee->ID, $result, 'refund' );
 							delete_post_meta( $rel_attendee->ID, 'tix_pending_refund' );
 							$rel_attendee->post_status = 'refund';
 							wp_update_post( $rel_attendee );
+							update_post_meta( $attendee->ID, 'tix_refund_transaction_id', $result['refund_transaction_id'] );
+							update_post_meta( $attendee->ID, 'tix_refund_transaction_details', $result['refund_transaction_details'] );
 							clean_post_cache( $rel_attendee->ID );
 						}
 					}
-
 				} else {
-					$this->log( sprintf( 'Could not refund %s.', $transaction_id ), $attendee->ID, $txn, 'refund' );
+					$this->log( sprintf( 'Could not refund %s.', $transaction_id ), $attendee->ID, $result, 'refund' );
+					$total_results['failed']++;
 
 					// Let other attendees know they can not be refunded too.
 					while ( $rel_attendees = get_posts( $rel_attendees_query ) ) {
 						foreach ( $rel_attendees as $rel_attendee ) {
-							$this->log( sprintf( 'Could not refund %s.', $transaction_id ), $rel_attendee->ID, $txn, 'refund' );
+							$this->log( sprintf( 'Could not refund %s.', $transaction_id ), $rel_attendee->ID, $result, 'refund' );
 							delete_post_meta( $rel_attendee->ID, 'tix_pending_refund' );
 							clean_post_cache( $rel_attendee->ID );
 						}
@@ -3002,8 +3066,11 @@ class CampTix_Plugin {
 				}
 			} else {
 				$this->log( 'No transaction id for this attendee, not refunding.', $attendee->ID, null, 'refund' );
+				$total_results['failed']++;
 			}
 		}
+
+		update_option( 'camptix_refund_all_results', $total_results );
 	}
 
 	/**
@@ -5081,6 +5148,7 @@ class CampTix_Plugin {
 
 				// Attempt to process the refund transaction
 				$result = $payment_method_obj->payment_refund( $transaction['payment_token'] );
+				$this->log( 'Individual refund request result.', $attendee->ID, $result, 'refund' );
 				if ( CampTix_Plugin::PAYMENT_STATUS_REFUNDED == $result ) {
 					foreach ( $attendees as $attendee ) {
 						update_post_meta( $attendee->ID, 'tix_refund_reason', $reason );
