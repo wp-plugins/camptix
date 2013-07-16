@@ -1402,6 +1402,11 @@ class CampTix_Plugin {
 				add_settings_section( 'general', __( 'General Configuration', 'camptix' ), array( $this, 'menu_setup_section_general' ), 'camptix_options' );
 				$this->add_settings_field_helper( 'event_name', __( 'Event Name', 'camptix' ), 'field_text' );
 				$this->add_settings_field_helper( 'currency', __( 'Currency', 'camptix' ), 'field_currency' );
+
+				$this->add_settings_field_helper( 'refunds_enabled', __( 'Enable Refunds', 'camptix' ), 'field_enable_refunds', false,
+					__( "This will allows your customers to refund their tickets purchase by filling out a simple refund form.", 'camptix' )
+				);
+
 				break;
 			case 'payment':
 				foreach ( $this->get_available_payment_methods() as $key => $payment_method ) {
@@ -1438,10 +1443,6 @@ class CampTix_Plugin {
 
 				$this->add_settings_field_helper( 'reservations_enabled', __( 'Enable Reservations', 'camptix' ), 'field_yesno', false,
 					__( "Reservations is a way to make sure that a certain group of people, can always purchase their tickets, even if you sell out fast.", 'camptix' )
-				);
-
-				$this->add_settings_field_helper( 'refunds_enabled', __( 'Enable Refunds', 'camptix' ), 'field_enable_refunds', false,
-					__( "This will allows your customers to refund their tickets purchase by filling out a simple refund form.", 'camptix' )
 				);
 
 				if ( current_user_can( $this->caps['refund_all'] ) ) {
@@ -1498,13 +1499,17 @@ class CampTix_Plugin {
 	function validate_options( $input ) {
 		$output = $this->options;
 
+		// General
 		if ( isset( $input['event_name'] ) )
 			$output['event_name'] = sanitize_text_field( strip_tags( $input['event_name'] ) );
 
 		if ( isset( $input['currency'] ) && array_key_exists( $input['currency'], $this->get_currencies() ) )
 			$output['currency'] = $input['currency'];
 
-		$yesno_fields = array();
+		if ( isset( $input['refunds_date_end'], $input['refunds_enabled'] ) && (bool) $input['refunds_enabled'] && strtotime( $input['refunds_date_end'] ) )
+			$output['refunds_date_end'] = $input['refunds_date_end'];
+
+		$yesno_fields = array( 'refunds_enabled' );
 
 		// Beta features checkboxes
 		if ( $this->beta_features_enabled )
@@ -1513,9 +1518,6 @@ class CampTix_Plugin {
 		foreach ( $yesno_fields as $field )
 			if ( isset( $input[ $field ] ) )
 				$output[ $field ] = (bool) $input[ $field ];
-
-		if ( isset( $input['refunds_date_end'], $input['refunds_enabled'] ) && (bool) $input['refunds_enabled'] && strtotime( $input['refunds_date_end'] ) )
-			$output['refunds_date_end'] = $input['refunds_date_end'];
 
 		if ( isset( $input['version'] ) )
 			$output['version'] = $input['version'];
@@ -1562,7 +1564,6 @@ class CampTix_Plugin {
 	function get_beta_features() {
 		return array(
 			'reservations_enabled',
-			'refunds_enabled',
 			'refund_all_enabled',
 			'archived',
 		);
@@ -2480,15 +2481,12 @@ class CampTix_Plugin {
 				return;
 			}
 
-			$time_start = microtime( true );
-
 			$content_types = array(
 				'xml' => 'text/xml',
 				'csv' => 'text/csv',
 			);
 
 			$filename = sprintf( 'camptix-export-%s.%s', date( 'Y-m-d' ), $format );
-			$questions = $this->get_all_questions();
 
 			header( 'Content-Type: ' . $content_types[$format] );
 			header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
@@ -2496,113 +2494,127 @@ class CampTix_Plugin {
 			header( 'Pragma: private' );
 			header( "Expires: Mon, 26 Jul 1997 05:00:00 GMT" );
 
-			$columns = array(
-				'id' => __( 'Attendee ID', 'camptix' ),
-				'ticket' => __( 'Ticket Type', 'camptix' ),
-				'first_name' => __( 'First Name', 'camptix' ),
-				'last_name' => __( 'Last Name', 'camptix' ),
-				'email' => __( 'E-mail Address', 'camptix' ),
-				'date' => __( 'Purchase date', 'camptix' ),
-				'status' => __( 'Status', 'camptix' ),
-				'txn_id' => __( 'Transaction ID', 'camptix' ),
-				'coupon' => __( 'Coupon', 'camptix' ),
-			);
-			foreach ( $questions as $question )
-				$columns[ 'tix_q_' . $question->ID ] = apply_filters( 'the_title', $question->post_title );
-
-			if ( 'csv' == $format ) {
-				$stream = fopen( "php://output", 'w' );
-				fputcsv( $stream, $columns );
-			}
-
-			if ( 'xml' == $format )
-				echo '<?xml version="1.0" encoding="UTF-8"?>' . PHP_EOL . '<attendees>' . PHP_EOL;
-
-			$paged = 1;
-			while ( $attendees = get_posts( array(
-				'post_type' => 'tix_attendee',
-				'post_status' => array( 'publish', 'pending' ),
-				'posts_per_page' => 200,
-				'paged' => $paged++,
-				'orderby' => 'ID',
-				'order' => 'ASC',
-				'cache_results' => false,
-			) ) ) {
-
-				$attendee_ids = array();
-				foreach ( $attendees as $attendee )
-					$attendee_ids[] = $attendee->ID;
-
-				/**
-				 * Magic here, to by-pass object caching. See Revenue report for more info.
-				 */
-				$this->filter_post_meta = $this->prepare_metadata_for( $attendee_ids );
-				unset( $attendee_ids, $attendee );
-
-				foreach ( $attendees as $attendee ) {
-					$attendee_id = $attendee->ID;
-
-					$line = array(
-						'id' => $attendee_id,
-						'ticket' => $this->get_ticket_title( intval( get_post_meta( $attendee_id, 'tix_ticket_id', true ) ) ),
-						'first_name' => get_post_meta( $attendee_id, 'tix_first_name', true ),
-						'last_name' => get_post_meta( $attendee_id, 'tix_last_name', true ),
-						'email' => get_post_meta( $attendee_id, 'tix_email', true ),
-						'date' => mysql2date( 'Y-m-d', $attendee->post_date ),
-						'status' => ucfirst( $attendee->post_status ),
-						'txn_id' => get_post_meta( $attendee_id, 'tix_transaction_id', true ),
-						'coupon' => get_post_meta( $attendee_id, 'tix_coupon', true ),
-					);
-
-					$answers = (array) get_post_meta( $attendee_id, 'tix_questions', true );
-
-					foreach ( $questions as $question ) {
-
-						// For multiple checkboxes
-						if ( isset( $answers[ $question->ID ] ) && is_array( $answers[ $question->ID ] ) )
-							$answers[ $question->ID ] = implode( ', ', (array) $answers[ $question->ID ] );
-
-						$line[ 'tix_q_' . $question->ID ] = ( isset( $answers[ $question->ID ] ) ) ? $answers[ $question->ID ] : '';
-					}
-
-					// Make sure every column is printed.
-					$clean_line = array();
-					foreach ( $columns as $key => $caption )
-						$clean_line[$key] = isset( $line[$key] ) ? $line[$key] : '';
-
-					if ( 'csv' == $format )
-						fputcsv( $stream, $clean_line );
-
-					if ( 'xml' == $format ) {
-						echo "\t<attendee>" . PHP_EOL;
-						foreach ( $clean_line as $tag => $value ) {
-							printf( "\t\t<%s>%s</%s>" . PHP_EOL, $tag, esc_html( $value ), $tag );
-						}
-						echo "\t</attendee>" . PHP_EOL;
-					}
-
-					// The following was commented out because object caching was disabled with filter_post_meta.
-					// Delete caches individually rather than clean_post_cache( $attendee_id ),
-					// prevents querying for children posts, saves a bunch of queries :)
-					// wp_cache_delete( $attendee_id, 'posts' );
-					// wp_cache_delete( $attendee_id, 'post_meta' );
-				}
-
-				/**
-				 * Don't forget to clear up the used meta sort-of cache.
-				 */
-				$this->filter_post_meta = false;
-			}
-
-			if ( 'csv' == $format )
-				fclose( $stream );
-
-			if ( 'xml' == $format )
-				echo '</attendees>';
-
-			$this->log( sprintf( 'Finished %s data export in %s seconds.', $format, microtime(true) - $time_start ) );
+			echo $this->generate_attendee_report( $format );
 			die();
 		}
+	}
+
+	/*
+	 * Generate and return the raw attendee report contents
+	 */
+	function generate_attendee_report( $format ) {
+		$time_start = microtime( true );
+		$questions = $this->get_all_questions();
+
+		$columns = array(
+			'id' => __( 'Attendee ID', 'camptix' ),
+			'ticket' => __( 'Ticket Type', 'camptix' ),
+			'first_name' => __( 'First Name', 'camptix' ),
+			'last_name' => __( 'Last Name', 'camptix' ),
+			'email' => __( 'E-mail Address', 'camptix' ),
+			'date' => __( 'Purchase date', 'camptix' ),
+			'status' => __( 'Status', 'camptix' ),
+			'txn_id' => __( 'Transaction ID', 'camptix' ),
+			'coupon' => __( 'Coupon', 'camptix' ),
+		);
+		foreach ( $questions as $question )
+			$columns[ 'tix_q_' . $question->ID ] = apply_filters( 'the_title', $question->post_title );
+
+		if ( 'csv' == $format ) {
+			ob_start();
+			$report = fopen( "php://output", 'w' );
+			fputcsv( $report, $columns );
+		}
+
+		if ( 'xml' == $format )
+			$report = '<?xml version="1.0" encoding="UTF-8"?>' . PHP_EOL . '<attendees>' . PHP_EOL;
+
+		$paged = 1;
+		while ( $attendees = get_posts( array(
+			'post_type' => 'tix_attendee',
+			'post_status' => array( 'publish', 'pending' ),
+			'posts_per_page' => 200,
+			'paged' => $paged++,
+			'orderby' => 'ID',
+			'order' => 'ASC',
+			'cache_results' => false,
+		) ) ) {
+
+			$attendee_ids = array();
+			foreach ( $attendees as $attendee )
+				$attendee_ids[] = $attendee->ID;
+
+			/**
+			 * Magic here, to by-pass object caching. See Revenue report for more info.
+			 */
+			$this->filter_post_meta = $this->prepare_metadata_for( $attendee_ids );
+			unset( $attendee_ids, $attendee );
+
+			foreach ( $attendees as $attendee ) {
+				$attendee_id = $attendee->ID;
+
+				$line = array(
+					'id' => $attendee_id,
+					'ticket' => $this->get_ticket_title( intval( get_post_meta( $attendee_id, 'tix_ticket_id', true ) ) ),
+					'first_name' => get_post_meta( $attendee_id, 'tix_first_name', true ),
+					'last_name' => get_post_meta( $attendee_id, 'tix_last_name', true ),
+					'email' => get_post_meta( $attendee_id, 'tix_email', true ),
+					'date' => mysql2date( 'Y-m-d', $attendee->post_date ),
+					'status' => ucfirst( $attendee->post_status ),
+					'txn_id' => get_post_meta( $attendee_id, 'tix_transaction_id', true ),
+					'coupon' => get_post_meta( $attendee_id, 'tix_coupon', true ),
+				);
+
+				$answers = (array) get_post_meta( $attendee_id, 'tix_questions', true );
+
+				foreach ( $questions as $question ) {
+
+					// For multiple checkboxes
+					if ( isset( $answers[ $question->ID ] ) && is_array( $answers[ $question->ID ] ) )
+						$answers[ $question->ID ] = implode( ', ', (array) $answers[ $question->ID ] );
+
+					$line[ 'tix_q_' . $question->ID ] = ( isset( $answers[ $question->ID ] ) ) ? $answers[ $question->ID ] : '';
+				}
+
+				// Make sure every column is printed.
+				$clean_line = array();
+				foreach ( $columns as $key => $caption )
+					$clean_line[$key] = isset( $line[$key] ) ? $line[$key] : '';
+
+				if ( 'csv' == $format )
+					fputcsv( $report, $clean_line );
+
+				if ( 'xml' == $format ) {
+					$report .= "\t<attendee>" . PHP_EOL;
+					foreach ( $clean_line as $tag => $value ) {
+						$report .= sprintf( "\t\t<%s>%s</%s>" . PHP_EOL, $tag, esc_html( $value ), $tag );
+					}
+					$report .= "\t</attendee>" . PHP_EOL;
+				}
+
+				// The following was commented out because object caching was disabled with filter_post_meta.
+				// Delete caches individually rather than clean_post_cache( $attendee_id ),
+				// prevents querying for children posts, saves a bunch of queries :)
+				// wp_cache_delete( $attendee_id, 'posts' );
+				// wp_cache_delete( $attendee_id, 'post_meta' );
+			}
+
+			/**
+			 * Don't forget to clear up the used meta sort-of cache.
+			 */
+			$this->filter_post_meta = false;
+		}
+
+		if ( 'csv' == $format ) {
+			fclose( $report );
+			$report = ob_get_clean();
+		}
+
+		if ( 'xml' == $format )
+			$report .= '</attendees>';
+
+		$this->log( sprintf( 'Finished %s data export in %s seconds.', $format, microtime(true) - $time_start ) );
+		return $report;
 	}
 
 	/**
@@ -2958,7 +2970,7 @@ class CampTix_Plugin {
 			foreach ( $payment_methods as $key => $name ) {
 				$method = $this->get_payment_method_by_id( $key );
 
-				if ( $method && $method->supports_feature( 'refund-all' ) ) {		// test off and on. not working right now
+				if ( $method && $method->supports_feature( 'refund-all' ) ) {
 					$supported = true;
 					break;
 				}
