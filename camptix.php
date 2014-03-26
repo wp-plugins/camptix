@@ -1,12 +1,12 @@
 <?php
 /*
  * Plugin Name: CampTix Event Ticketing
- * Plugin URI: http://wordcamp.org
+ * Plugin URI:  http://wordcamp.org
  * Description: Simple and flexible event ticketing for WordPress.
- * Version: 1.4.1
- * Author: Automattic
- * Author URI: http://wordcamp.org
- * License: GPLv2
+ * Version:     1.4.1
+ * Author:      Automattic
+ * Author URI:  http://wordcamp.org
+ * License:     GPLv2
  */
 
 class CampTix_Plugin {
@@ -420,7 +420,7 @@ class CampTix_Plugin {
 	 * Runs during camptix_summarize_by_field, fetches answers from
 	 * attendee objects and increments summary.
 	 */
-	function camptix_summarize_by_field_extras( $summarize_by, $summary, $attendee ) {
+	function camptix_summarize_by_field_extras( $summarize_by, &$summary, $attendee ) {
 		if ( 'tix_q_' != substr( $summarize_by, 0, 6 ) )
 			return;
 
@@ -6333,7 +6333,7 @@ class CampTix_Plugin {
 		}
 
 		if ( isset( $order['coupon'] ) && $order['coupon'] )
-			$receipt_content .= sprintf( '* ' . __( 'Coupon used: %s') . "\n", $order['coupon'] );
+			$receipt_content .= sprintf( '* ' . __( 'Coupon used: %s', 'camptix' ) . "\n", $order['coupon'] );
 
 		$receipt_content .= sprintf( "* " . __( 'Total: %s', 'camptix' ), $this->append_currency( $order['total'], false ) );
 		$signature = apply_filters( 'camptix_ticket_email_signature', __( 'Let us know if you have any questions!', 'camptix' ) );
