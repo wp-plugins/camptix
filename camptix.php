@@ -2541,6 +2541,9 @@ class CampTix_Plugin {
 		foreach ( $questions as $question )
 			$columns[ 'tix_q_' . $question->ID ] = apply_filters( 'the_title', $question->post_title );
 
+		$extra_columns = apply_filters( 'camptix_attendee_report_extra_columns', array() );
+		$columns = array_merge( $columns, $extra_columns );
+
 		if ( 'csv' == $format ) {
 			ob_start();
 			$report = fopen( "php://output", 'w' );
@@ -2595,6 +2598,10 @@ class CampTix_Plugin {
 						$answers[ $question->ID ] = implode( ', ', (array) $answers[ $question->ID ] );
 
 					$line[ 'tix_q_' . $question->ID ] = ( isset( $answers[ $question->ID ] ) ) ? $answers[ $question->ID ] : '';
+				}
+
+				foreach ( $extra_columns as $index => $label ) {
+					$line[ $index ] = apply_filters( 'camptix_attendee_report_column_value_' . $index, '', $attendee );
 				}
 
 				// Make sure every column is printed.
@@ -3216,6 +3223,8 @@ class CampTix_Plugin {
 					<div class="misc-pub-section">
 						<input id="tix_privacy_<?php esc_attr( $post->ID ); ?>" name="tix_privacy" type="checkbox" <?php checked( get_post_meta( $post->ID, 'tix_privacy', true ), 'private' ); ?> />
 						<label for="tix_privacy_<?php esc_attr( $post->ID ); ?>"><?php _e( 'Hide from public attendees list', 'camptix' ); ?></label>
+
+						<?php do_action( 'camptix_attendee_submitdiv_misc', $post ); ?>
 					</div>
 
 				</div><!-- #misc-publishing-actions -->
