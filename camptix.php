@@ -3793,7 +3793,6 @@ class CampTix_Plugin {
 		$access_token = get_post_meta( $post->ID, 'tix_access_token', true );
 		$edit_token = get_post_meta( $post->ID, 'tix_edit_token', true );
 		$rows = array();
-		$roows = array();
 
 		// General
 		$rows[] = array( __( 'General', 'camptix' ), '' );
@@ -3802,6 +3801,9 @@ class CampTix_Plugin {
 		$rows[] = array( __( 'Last Name', 'camptix' ), esc_html( get_post_meta( $post->ID, 'tix_last_name', true ) ) );
 		$rows[] = array( __( 'E-mail', 'camptix' ), esc_html( get_post_meta( $post->ID, 'tix_email', true ) ) );
 		$rows[] = array( __( 'Ticket', 'camptix' ), sprintf( '<a href="%s">%s</a>', get_edit_post_link( $ticket->ID ), $ticket->post_title ) );
+
+		$rows = apply_filters( 'camptix_metabox_attendee_info_additional_rows', $rows, $post );
+
 		$rows[] = array( __( 'Edit Token', 'camptix' ), sprintf( '<a href="%s">%s</a>', $this->get_edit_attendee_link( $post->ID, $edit_token ), $edit_token ) );
 		$rows[] = array( __( 'Access Token', 'camptix' ), sprintf( '<a href="%s">%s</a>', $this->get_access_tickets_link( $access_token ), $access_token ) );
 
@@ -4066,7 +4068,7 @@ class CampTix_Plugin {
 			delete_post_meta( $post_id, 'tix_privacy' );
 		}
 
-		$search_meta_fields = array(
+		$search_meta_fields = apply_filters( 'camptix_save_attendee_post_add_search_meta', array(
 			'tix_first_name',
 			'tix_last_name',
 			'tix_email',
@@ -4081,7 +4083,8 @@ class CampTix_Plugin {
 			'tix_payment_token',
 			'tix_payment_method',
 			'tix_privacy',
-		);
+		) );
+
 		$data = array( 'timestamp' => time() );
 
 		foreach ( $search_meta_fields as $key )
@@ -4185,7 +4188,7 @@ class CampTix_Plugin {
 
 		// Allow third-party forms to initiate a ticket purchase.
 		if ( isset( $_POST['tix_single_ticket_purchase'] ) ) {
-			$_POST['tix_tickets_selected'] = array( $_POST['tix_single_ticket_purchase'] => 1 );
+			$_REQUEST['tix_tickets_selected'] = array( $_POST['tix_single_ticket_purchase'] => 1 );
 		}
 
 		if ( isset( $_POST ) && ! empty( $_POST ) )
@@ -4267,15 +4270,17 @@ class CampTix_Plugin {
 		unset( $tickets, $ticket );
 
 		// Populate selected tickets from $_POST!
-		if ( isset( $_POST['tix_tickets_selected'] ) )
-			foreach ( $_POST['tix_tickets_selected'] as $ticket_id => $count )
+		if ( isset( $_REQUEST['tix_tickets_selected'] ) ) {
+			foreach ( $_REQUEST['tix_tickets_selected'] as $ticket_id => $count ) {
 				if ( isset( $this->tickets[ $ticket_id ] ) && $count > 0 )
 					$this->tickets_selected[ $ticket_id ] = intval( $count );
+			}
+		}
 
 		// Make an order.
 		$this->order = array( 'items' => array(), 'total' => 0 );
-		if ( isset( $_POST['tix_tickets_selected'] ) ) {
-			foreach ( $_POST['tix_tickets_selected'] as $ticket_id => $count ) {
+		if ( isset( $_REQUEST['tix_tickets_selected'] ) ) {
+			foreach ( $_REQUEST['tix_tickets_selected'] as $ticket_id => $count ) {
 				$ticket = $this->tickets[ $ticket_id ];
 				$item = array(
 					'id' => $ticket->ID,
@@ -4358,7 +4363,7 @@ class CampTix_Plugin {
 				$this->log( 'Something is terribly wrong, extra > 0 after stripping extra coupons', 0, null, 'critical' );
 		}
 
-		if ( isset( $_POST['tix_tickets_selected'] ) ) {
+		if ( isset( $_REQUEST['tix_tickets_selected'] ) ) {
 			$this->error_flags['no_tickets_selected'] = true;
 			foreach ( $this->tickets_selected as $ticket_id => $count )
 				if ( $count > 0 ) unset( $this->error_flags['no_tickets_selected'] );
@@ -4746,6 +4751,9 @@ class CampTix_Plugin {
 									<?php $value = isset( $this->form_data['tix_attendee_info'][$i]['last_name'] ) ? $this->form_data['tix_attendee_info'][$i]['last_name'] : ''; ?>
 									<td class="tix-right"><input name="tix_attendee_info[<?php echo $i; ?>][last_name]" type="text" value="<?php echo esc_attr( $value ); ?>" /></td>
 								</tr>
+
+								<?php do_action( 'camptix_attendee_form_additional_info', $this->form_data, $i, $this->tickets_selected_count ); ?>
+
 								<tr class="tix-row-email">
 									<td class="tix-required tix-left"><?php _e( 'E-mail', 'camptix' ); ?> <span class="tix-required-star">*</span></td>
 									<?php $value = isset( $this->form_data['tix_attendee_info'][$i]['email'] ) ? $this->form_data['tix_attendee_info'][$i]['email'] : ''; ?>
@@ -5066,6 +5074,8 @@ class CampTix_Plugin {
 				update_post_meta( $attendee->ID, 'tix_email', sanitize_email( $new_ticket_info['email'] ) );
 				update_post_meta( $attendee->ID, 'tix_questions', $new_answers );
 
+				do_action( 'camptix_form_edit_attendee_update_post_meta', $new_ticket_info, $attendee );
+
 				wp_update_post( $attendee ); // triggers save_attendee
 
 				$this->info( __( 'Your information has been saved!', 'camptix' ) );
@@ -5096,6 +5106,9 @@ class CampTix_Plugin {
 							<td class="tix-required tix-left"><?php _e( 'Last Name', 'camptix' ); ?> <span class="tix-required-star">*</span></td>
 							<td class="tix-right"><input name="tix_ticket_info[last_name]" type="text" value="<?php echo esc_attr( $ticket_info['last_name'] ); ?>" /></td>
 						</tr>
+
+						<?php do_action( 'camptix_form_edit_attendee_additional_info', $attendee ); ?>
+
 						<tr>
 							<td class="tix-required tix-left"><?php _e( 'E-mail', 'camptix' ); ?> <span class="tix-required-star">*</span></td>
 							<td class="tix-right"><input name="tix_ticket_info[email]" type="text" value="<?php echo esc_attr( $ticket_info['email'] ); ?>" /></td>
@@ -5785,6 +5798,8 @@ class CampTix_Plugin {
 			$attendee->email = $attendee_info['email'];
 			$attendee->answers = $answers;
 
+			$attendee = apply_filters( 'camptix_form_register_complete_attendee_object', $attendee, $attendee_info );
+
 			if ( isset( $_POST['tix_receipt_email'] ) && $_POST['tix_receipt_email'] == $i )
 				$receipt_email = $attendee->email;
 
@@ -5844,6 +5859,8 @@ class CampTix_Plugin {
 				update_post_meta( $post_id, 'tix_email', $attendee->email );
 				update_post_meta( $post_id, 'tix_tickets_selected', $this->tickets_selected );
 				update_post_meta( $post_id, 'tix_receipt_email', $receipt_email );
+
+				do_action( 'camptix_checkout_update_post_meta', $post_id, $attendee );
 
 				// Cash
 				update_post_meta( $post_id, 'tix_order_total', (float) $this->order['total'] );
@@ -6548,7 +6565,7 @@ class CampTix_Plugin {
 				if ( in_array( $message, $printed ) ) continue;
 
 				$printed[] = $message;
-				echo '<p class="tix-error">' . esc_html( $message ) . '</p>';
+				echo '<p class="tix-error">' . wp_kses( $message, wp_kses_allowed_html( 'data' ) ) . '</p>';
 			}
 			echo '</div><!-- #tix-errors -->';
 		}
@@ -6559,7 +6576,7 @@ class CampTix_Plugin {
 				if ( in_array( $message, $printed ) ) continue;
 
 				$printed[] = $message;
-				echo '<p class="tix-notice">' . esc_html( $message ) . '</p>';
+				echo '<p class="tix-notice">' . wp_kses( $message, wp_kses_allowed_html( 'data' ) ) . '</p>';
 			}
 			echo '</div><!-- #tix-notices -->';
 		}
@@ -6570,7 +6587,7 @@ class CampTix_Plugin {
 				if ( in_array( $message, $printed ) ) continue;
 
 				$printed[] = $message;
-				echo '<p class="tix-info">' . esc_html( $message ) . '</p>';
+				echo '<p class="tix-info">' . wp_kses( $message, wp_kses_allowed_html( 'data' ) ) . '</p>';
 			}
 			echo '</div><!-- #tix-infos -->';
 		}
@@ -6702,6 +6719,7 @@ class CampTix_Plugin {
 
 			// 'logging-file'  => $this->get_default_addon_path( 'logging-file.php' ),
 			// 'logging-json'  => $this->get_default_addon_path( 'logging-file-json.php' ),
+			// 'require-login' => $this->get_default_addon_path( 'require-login.php' ),
 		) );
 
 		foreach ( $default_addons as $filename )
