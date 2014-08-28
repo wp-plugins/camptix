@@ -5038,7 +5038,13 @@ class CampTix_Plugin {
 							<?php echo mysql2date( get_option( 'date_format' ), $attendee->post_date ); ?>
 						</td>
 						<td>
-							<a href="<?php echo esc_url( $edit_link ); ?>"><?php _e( 'Edit information', 'camptix' ); ?></a>
+							<?php
+								echo apply_filters(
+									'camptix_edit_info_cell_content',
+									sprintf( '<a href="%s">%s</a>', esc_url( $edit_link ), __( 'Edit information', 'camptix' ) ),
+									$attendee
+								);
+							?>
 						</td>
 					</tr>
 
@@ -5160,8 +5166,6 @@ class CampTix_Plugin {
 				$this->error( __( 'Your information has not been changed!', 'camptix' ) );
 				foreach ( $errors as $error )
 					$this->error( $error );
-
-				// @todo maybe leave fields as $_POST'ed
 			} else {
 
 				// Save info
@@ -5176,9 +5180,11 @@ class CampTix_Plugin {
 
 				$this->info( __( 'Your information has been saved!', 'camptix' ) );
 				$this->log( 'Changed attendee data from frontend.', $attendee->ID, $_POST );
-				$ticket_info = $new_ticket_info;
-				$answers = $new_answers;
 			}
+
+			// Use $_POST'ed values in input fields
+			$ticket_info = $new_ticket_info;
+			$answers     = $new_answers;
 		}
 		?>
 		<div id="tix">
