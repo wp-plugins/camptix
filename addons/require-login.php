@@ -25,6 +25,7 @@ class CampTix_Require_Login extends CampTix_Addon {
 		add_filter( 'camptix_get_sorted_questions',                   array( $this, 'filter_unconfirmed_attendees_questions' ), 10, 2 );
 		add_filter( 'camptix_form_register_complete_attendee_object', array( $this, 'add_username_to_attendee_object' ), 10, 3 );
 		add_action( 'camptix_checkout_update_post_meta',              array( $this, 'save_checkout_username_meta' ), 10, 2 );
+		add_action( 'transition_post_status',                         array( $this, 'buyer_completed_registration' ), 10, 3 );
 		add_filter( 'camptix_email_tickets_template',                 array( $this, 'use_custom_email_templates' ), 10, 2 );
 		add_filter( 'camptix_get_attendee_email',                     array( $this, 'redirect_unknown_attendee_emails_to_buyer' ), 10, 2 );
 		add_action( 'camptix_attendee_form_before_input',             array( $this, 'inject_unknown_attendee_checkbox' ), 10, 3 );
@@ -255,15 +256,37 @@ class CampTix_Require_Login extends CampTix_Addon {
 	/**
 	 * Save the attendee's username in the database.
 	 *
-	 * @param int $post_id
+	 * @param int $attendee_id
 	 * @param stdClass $attendee
 	 */
-	public function save_checkout_username_meta( $post_id, $attendee ) {
-		update_post_meta( $post_id, 'tix_username', $attendee->username );
+	public function save_checkout_username_meta( $attendee_id, $attendee ) {
+		update_post_meta( $attendee_id, 'tix_username', $attendee->username );
+	}
 
-		if ( self::UNCONFIRMED_USERNAME != $attendee->username ) {
-			do_action( 'camptix_require_login_confirm_username', $post_id, $attendee->username );
+	/**
+	 * Fire a hook to indicate that the buyer has successfully completed their transaction.
+	 *
+	 * It may seem odd to create a callback function just to fire another hook, but this allows other plugins to
+	 * know when a buyer has completed registration without having to be aware of, and coupled to, the internal logic
+	 * of this addon.
+	 *
+	 * @param string $new_status
+	 * @param string $old_status
+	 * @param WP_Post $attendee
+	 */
+	public function buyer_completed_registration( $new_status, $old_status, $attendee ) {
+		if ( 'tix_attendee' != $attendee->post_type || 'publish' == $old_status || 'publish' != $new_status ) {
+			return;
 		}
+
+		$username = get_post_meta( $attendee->ID, 'tix_username', true );
+
+		// Make sure the attendee is the buyer
+		if ( CampTix_Require_Login::UNCONFIRMED_USERNAME == $username ) {
+			return;
+		}
+
+		do_action( 'camptix_rl_buyer_completed_registration', $attendee, $username );
 	}
 
 	/**
@@ -667,7 +690,7 @@ class CampTix_Require_Login extends CampTix_Addon {
 		update_post_meta( $attendee->ID, 'tix_username', $current_user->user_login );
 
 		if ( self::UNCONFIRMED_USERNAME == $old_username ) {
-			do_action( 'camptix_require_login_confirm_username', $attendee->ID, $current_user->user_login );
+			do_action( 'camptix_rl_registration_confirmed', $attendee->ID, $current_user->user_login );
 		}
 	}
 
