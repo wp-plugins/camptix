@@ -7,13 +7,12 @@
  */
 class CampTix_Require_Login extends CampTix_Addon {
 	const UNCONFIRMED_USERNAME = '[[ unconfirmed ]]';
+	const UNKNOWN_ATTENDEE_EMAIL = 'unknown.attendee@example.org';
 
 	/**
 	 * Register hook callbacks
 	 */
 	public function __construct() {
-		add_action( 'template_redirect',                              array( $this, 'block_unauthenticated_actions' ), 7 );    // before CampTix_Plugin->template_redirect()
-
 		// Registration Information front-end screen
 		add_filter( 'camptix_register_button_classes',                array( $this, 'hide_register_form_elements' ) );
 		add_filter( 'camptix_coupon_link_classes',                    array( $this, 'hide_register_form_elements' ) );
@@ -46,7 +45,9 @@ class CampTix_Require_Login extends CampTix_Addon {
 		add_filter( 'camptix_form_edit_attendee_ticket_info',         array( $this, 'replace_unknown_attendee_info_stubs' ) );
 
 		// Misc
+		add_action( 'template_redirect',                              array( $this, 'block_unauthenticated_actions' ), 7 );    // before CampTix_Plugin->template_redirect()
 		add_filter( 'camptix_attendees_shortcode_query_args',         array( $this, 'hide_unconfirmed_attendees' ) );
+		add_filter( 'camptix_private_attendees_parameters',           array( $this, 'prevent_unknown_attendees_viewing_private_content' ) );
 	}
 
 	/**
@@ -588,7 +589,7 @@ class CampTix_Require_Login extends CampTix_Addon {
 		$info = array(
 			'first_name' => __( 'Unknown', 'camptix' ),
 			'last_name'  => __( 'Attendee', 'camptix' ),
-			'email'      => 'unknown.attendee@example.org',
+			'email'      => self::UNKNOWN_ATTENDEE_EMAIL,
 		);
 
 		return $info;
@@ -767,6 +768,22 @@ class CampTix_Require_Login extends CampTix_Addon {
 		}
 
 		return $query_args;
+	}
+
+	/*
+	 * Prevent unknown attendees from viewing private content.
+	 *
+	 * The name/email used for unknown attendees is revealed not secret, so anyone could use them to login to a
+	 * page with [camptix_private] content.
+	 */
+	public function prevent_unknown_attendees_viewing_private_content( $parameters ) {
+		$parameters['meta_query'][] = array(
+			'key'     => 'tix_email',
+			'value'   => self::UNKNOWN_ATTENDEE_EMAIL,
+			'compare' => '!='
+		);
+
+		return $parameters;
 	}
 } // CampTix_Require_Login 
 
