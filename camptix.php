@@ -2674,6 +2674,7 @@ class CampTix_Plugin {
 
 				$buyer = get_posts( array(
 					'post_type'      => 'tix_attendee',
+					'post_status'    => array( 'publish', 'pending' ),
 					'posts_per_page' => 1,
 					'orderby'        => 'ID',
 					'order'          => 'ASC',
@@ -2682,11 +2683,6 @@ class CampTix_Plugin {
 						array(
 							'key'    => 'tix_access_token',
 							'value'  => get_post_meta( $attendee->ID, 'tix_access_token', true ),
-						),
-
-						array(
-							'key'    => 'tix_email',
-							'value'  => get_post_meta( $attendee->ID, 'tix_receipt_email', true ),
 						),
 					),
 				) );
