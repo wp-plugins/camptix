@@ -119,4 +119,3 @@ For more information, visit the [Getting Started](https://github.com/automattic/
 
 = 1.0 =
 * First version
-
