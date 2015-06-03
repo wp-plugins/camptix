@@ -130,6 +130,9 @@ class CampTix_Plugin {
 		add_action( 'save_post', array( $this, 'save_attendee_post' ) );
 		add_action( 'save_post', array( $this, 'save_coupon_post' ) );
 
+		// Handle query extras for attendees, tickets, etc.
+		add_action( 'pre_get_posts', array( $this, 'pre_get_posts' ) );
+
 		// Used to update stats
 		add_action( 'transition_post_status', array( $this, 'transition_post_status' ), 10, 3 );
 		add_action( 'wp_ajax_camptix_client_stats', array( $this, 'process_client_stats' ) );
@@ -504,6 +507,7 @@ class CampTix_Plugin {
 
 		// Attendee columns
 		add_filter( 'manage_edit-tix_attendee_columns', array( $this, 'manage_columns_attendee_filter' ) );
+		add_filter( 'manage_edit-tix_attendee_sortable_columns', array( $this, 'manage_columns_attendee_sortable' ) );
 		add_action( 'manage_tix_attendee_posts_custom_column', array( $this, 'manage_columns_attendee_action' ), 10, 2 );
 
 		// Coupon columns
@@ -600,6 +604,18 @@ class CampTix_Plugin {
 	}
 
 	/**
+	 * Sortable columns for the Attendees screen.
+	 *
+	 * @param array $columns An array of sortable columns, key => orderby value.
+	 *
+	 * @return array The result with additional sortable columns.
+	 */
+	public function manage_columns_attendee_sortable( $columns ) {
+		$columns['tix_ticket'] = 'tix_ticket_id';
+		return $columns;
+	}
+
+	/**
 	 * Manage columns action for attendee post type.
 	 */
 	function manage_columns_attendee_action( $column, $post_id ) {
@@ -610,6 +626,12 @@ class CampTix_Plugin {
 				if ( $ticket ) {
 					$attendees_url = get_admin_url( 0, '/edit.php?post_type=tix_attendee' );
 					$attendees_url = add_query_arg( 's', 'tix_ticket_id:' . intval( $ticket->ID ), $attendees_url );
+
+					// Don't drop the post_status query variable.
+					if ( get_query_var('post_status') ) {
+						$attendees_url = add_query_arg( 'post_status', get_query_var('post_status'), $attendees_url );
+					}
+
 					printf( '<a href="%s">%s</a>', esc_url( $attendees_url ), esc_html( $ticket->post_title ) );
 				}
 				break;
@@ -760,6 +782,42 @@ class CampTix_Plugin {
 				'tix_purchase_count',
 				'tix_reserved',
 			), true );
+		}
+	}
+
+	/**
+	 * Support for custom sorting and other campthings.
+	 *
+	 * @param object $query A WP_Query object.
+	 */
+	public function pre_get_posts( $query ) {
+		if ( ! $query->is_main_query() )
+			return;
+
+		// Allow ordering by the purchased ticket id.
+		if ( $query->get('orderby') == 'tix_ticket_id' && $query->get('post_type') == 'tix_attendee' ) {
+			$meta_query = array(
+				'relation' => 'OR',
+				array(
+					'key' => 'tix_ticket_id',
+					'compare' => 'EXISTS',
+				),
+				array(
+					'key' => 'tix_ticket_id',
+					'compare' => 'NOT EXISTS',
+				),
+			);
+
+			// Merge the meta query if one's already been provided.
+			if ( $query->get('meta_query') ) {
+				$meta_query = array(
+					'relation' => 'AND',
+					$query->get('meta_query'),
+					$meta_query,
+				);
+			}
+
+			$query->set( 'meta_query', $meta_query );
 		}
 	}
 
@@ -2815,9 +2873,13 @@ class CampTix_Plugin {
 				}
 			} else { // errors or preview
 
-				if ( count( $errors ) > 0 )
-					foreach ( $errors as $error )
+				if ( count( $errors ) > 0 ) {
+					foreach ( $errors as $error ) {
 						add_settings_error( 'camptix', false, $error );
+					}
+				} elseif ( ! empty( $_POST['tix_notify_preview'] ) ) {
+					add_settings_error( 'camptix', 'none', sprintf( __( 'Your segment matched %s recipients.', 'camptix' ), count( $recipients ) ), 'updated' );
+				}
 
 				// Keep form data.
 				$form_data['subject'] = wp_kses_post( $_POST['tix_notify_subject'] );
@@ -3006,7 +3068,7 @@ class CampTix_Plugin {
 
 				<?php
 					// Segmenting supported by these types. only
-					if ( ! in_array( get_post_meta( $question->ID, 'tix_type', true ), array( 'select' ) ) )
+					if ( ! in_array( get_post_meta( $question->ID, 'tix_type', true ), array( 'select', 'radio', 'checkbox', 'text' ) ) )
 						continue;
 				?>
 
@@ -3014,7 +3076,8 @@ class CampTix_Plugin {
 					caption: '<?php echo esc_js( $question->post_title ); ?>',
 					option_value: '<?php echo esc_js( sprintf( 'tix-question-%d', $question->ID ) ); ?>',
 
-					<?php if ( get_post_meta( $question->ID, 'tix_type', true ) == 'select' ) : ?>
+					<?php $type = get_post_meta( $question->ID, 'tix_type', true ); ?>
+					<?php if ( in_array( $type, array( 'select', 'radio' ) ) ) : ?>
 
 						type: 'select',
 						ops: [ 'is', 'is not' ],
@@ -3029,6 +3092,36 @@ class CampTix_Plugin {
 
 							echo json_encode( $values );
 						?>,
+
+					<?php elseif ( $type == 'checkbox' ) : ?>
+
+						type: 'select',
+						ops: [ 'is', 'is not' ],
+						values: <?php
+							$values = array( array( 'caption' => 'None', 'value' => -1 ) );
+							$question_values = (array) get_post_meta( $question->ID, 'tix_values', true );
+
+							if ( ! empty( $question_values ) ) {
+								foreach ( (array) get_post_meta( $question->ID, 'tix_values', true ) as $value ) {
+									$values[] = array(
+										'caption' => html_entity_decode( $value ),
+										'value' => $value,
+									);
+								}
+							} else {
+								$values[] = array(
+									'caption' => __( 'Yes', 'camptix' ),
+									'value' => 'Yes',
+								);
+							}
+
+							echo json_encode( $values );
+						?>,
+
+					<?php elseif ( $type == 'text' ) : ?>
+
+						type: 'text',
+						ops: [ 'is', 'is not', 'contains', 'does not contain', 'starts with', 'does not start with' ],
 
 					<?php endif; ?>
 
@@ -3109,6 +3202,7 @@ class CampTix_Plugin {
 	 */
 	public function get_segment( $relation, $conditions ) {
 		$segment = array();
+		$empty_query = true;
 		$post_query_segment = array();
 		$post_query_conditions = array();
 
@@ -3153,6 +3247,7 @@ class CampTix_Plugin {
 				}
 
 				$query['meta_query'][] = $meta_query;
+				$empty_query = false;
 				continue;
 			}
 
@@ -3166,6 +3261,8 @@ class CampTix_Plugin {
 						$query['date_query'][] = array( 'after' => $condition['value'] );
 						break;
 				}
+
+				$empty_query = false;
 				continue;
 			}
 
@@ -3188,6 +3285,7 @@ class CampTix_Plugin {
 
 				}
 
+				$empty_query = false;
 				$query['meta_query'][] = $meta_query;
 				continue;
 			}
@@ -3200,6 +3298,20 @@ class CampTix_Plugin {
 		}
 
 		$post_query_segment = get_posts( $query );
+
+		// If the initial query was not a generic "empty" query, and we have an "or" relation,
+		// Then we can safely include anything that we got in the first results set, but should
+		// also query all the remaining attendees to try and match additional post_query_conditions.
+
+		if ( $relation == 'or' && ! $empty_query && ! empty( $post_query_conditions ) ) {
+			unset( $query['meta_query'] );
+			unset( $query['date_query'] );
+			$query['post__not_in'] = $post_query_segment;
+
+			$segment = $post_query_segment;
+			$post_query_segment = get_posts( $query );
+		}
+
 		unset( $conditions );
 		unset( $query );
 
@@ -3208,21 +3320,68 @@ class CampTix_Plugin {
 
 			// These conditions further filter the query.
 			foreach ( $post_query_conditions as $condition ) {
-
 				if ( preg_match( '#^tix-question-(\d+)$#', $condition['field'], $matches ) ) {
 					$question_id = $matches[1];
 					$answers = get_post_meta( $attendee_id, 'tix_questions', true );
+					$question = get_post( $question_id );
+					$question_type = get_post_meta( $question->ID, 'tix_type', true );
+
+					// Make sure the question is valid.
+					if ( $question->post_type != 'tix_question' || $question->post_status != 'publish' ) {
+						continue;
+					}
+
+					// Looking at a checkbox that's not checked.
+					if ( $question_type == 'checkbox' && $condition['value'] == -1 && empty( $answers[ $question->ID ] ) ) {
+						$answers[ $question->ID ] = array(-1);
+					}
 
 					// If the attendee was not asked this question, then they're not part of the segment.
-					if ( ! isset( $answers[ $question_id ] ) )
+					if ( ! isset( $answers[ $question->ID ] ) )
 						continue 2;
 
-					$answer = $answers[ $question_id ];
-					if ( ! is_array( $answer ) )
-						$answer = array( $answer );
+					$answer = $answers[ $question->ID ];
+					$maybe_include = false;
 
-					$in_array = in_array( $condition['value'], $answer );
-					$maybe_include = ( $condition['op'] == 'is' ) ? $in_array : ! $in_array;
+					if ( in_array( $question_type, array( 'select', 'checkbox', 'radio' ) ) ) {
+						if ( ! is_array( $answer ) )
+							$answer = array( $answer );
+
+						$in_array = in_array( $condition['value'], $answer );
+						$maybe_include = ( $condition['op'] == 'is' ) ? $in_array : ! $in_array;
+					} elseif ( $question_type == 'text' ) {
+
+						// Lowercase comparison.
+						if ( function_exists( 'mb_strtolower' ) ) {
+							$condition['value'] = mb_strtolower( $condition['value'] );
+							$answer = mb_strtolower( $answer );
+						} else {
+							$condition['value'] = strtolower( $condition['value'] );
+							$answer = strtolower( $answer );
+						}
+
+						switch ( $condition['op'] ) {
+							case 'is':
+								$maybe_include = $condition['value'] == $answer;
+								break;
+							case 'is not':
+								$maybe_include = $condition['value'] != $answer;
+								break;
+							case 'contains':
+								$maybe_include = ! empty( $condition['value'] ) && strpos( $answer, $condition['value'] ) !== false;
+								break;
+							case 'does not contain':
+								$maybe_include = ! empty( $condition['value'] ) && strpos( $answer, $condition['value'] ) === false;
+								break;
+							case 'starts with':
+								$maybe_include = ! empty( $condition['value'] ) && strpos( $answer, $condition['value'] ) === 0;
+								break;
+							case 'does not start with':
+								$maybe_include = ! empty( $condition['value'] ) && strpos( $answer, $condition['value'] ) !== 0;
+								break;
+							default:
+						}
+					}
 
 					// For 'or' relations a single 'true' is enough to
 					// include the attendee in the segment.
