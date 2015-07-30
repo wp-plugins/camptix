@@ -503,13 +503,17 @@ class CampTix_Payment_Method_PayPal extends CampTix_Payment_Method {
 		$paypal_token  = isset( $_REQUEST['token'] )             ? trim( $_REQUEST['token'] )             : '';
 		$payer_id      = isset( $_REQUEST['PayerID'] )           ? trim( $_REQUEST['PayerID'] )           : '';
 
+		$camptix->log( 'User returning from PayPal', null, compact( 'payer_id', 'payment_token', 'paypal_token' ) );
+
 		if ( ! $payment_token || ! $paypal_token || ! $payer_id ) {
+			$camptix->log( 'Dying because invalid PayPal return data', null, compact( 'payer_id', 'payment_token', 'paypal_token' ) );
 			wp_die( 'empty token' );
 		}
 
 		$order = $this->get_order( $payment_token );
 
 		if ( ! $order ) {
+			$camptix->log( "Dying because couldn't find order", null, compact( 'payment_token' ) );
 			wp_die( 'could not find order' );
 		}
 
@@ -544,11 +548,13 @@ class CampTix_Payment_Method_PayPal extends CampTix_Payment_Method {
 			$this->fill_payload_with_order( $payload, $order );
 
 			if ( (float) $checkout_details['PAYMENTREQUEST_0_AMT'] != $order['total'] ) {
+				$camptix->log( 'Dying because unexpected total', $order['attendee_id'], compact( 'checkout_details', 'order' ) );
 				wp_die( __( "Unexpected total!", 'camptix' ) );
 			}
 
 			// One final check before charging the user.
 			if ( ! $camptix->verify_order( $order ) ) {
+				$camptix->log( "Dying because couldn't verify order", $order['attendee_id'] );
 				wp_die( 'Something went wrong, order is no longer available.' );
 			}
 
@@ -560,7 +566,7 @@ class CampTix_Payment_Method_PayPal extends CampTix_Payment_Method {
 				$txn_id = $txn['PAYMENTINFO_0_TRANSACTIONID'];
 				$payment_status = $txn['PAYMENTINFO_0_PAYMENTSTATUS'];
 
-				$camptix->log( sprintf( 'Payment details for %s', $txn_id ), null, $txn );
+				$camptix->log( sprintf( 'Payment details for %s', $txn_id ), $order['attendee_id'], $txn );
 
 				/**
 				 * Note that when returning a successful payment, CampTix will be
@@ -575,7 +581,7 @@ class CampTix_Payment_Method_PayPal extends CampTix_Payment_Method {
 				);
 
 				if ( isset( $txn['L_ERRORCODE0'] ) && '11607' == $txn['L_ERRORCODE0'] ) {
-					$camptix->log( 'Duplicate request warning from PayPal.', null, $txn );
+					$camptix->log( 'Duplicate request warning from PayPal.', $order['attendee_id'], $txn );
 				}
 
 				return $camptix->payment_result( $payment_token, $this->get_status_from_string( $payment_status ), $payment_data );
@@ -584,7 +590,7 @@ class CampTix_Payment_Method_PayPal extends CampTix_Payment_Method {
 					'error' => 'Error during DoExpressCheckoutPayment',
 					'data' => $request,
 				);
-				$camptix->log( 'Error during DoExpressCheckoutPayment.', null, $request );
+				$camptix->log( 'Error during DoExpressCheckoutPayment.', $order['attendee_id'], $request );
 				return $camptix->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data );
 			}
 		} else {
@@ -592,7 +598,7 @@ class CampTix_Payment_Method_PayPal extends CampTix_Payment_Method {
 				'error' => 'Error during GetExpressCheckoutDetails',
 				'data' => $request,
 			);
-			$camptix->log( 'Error during GetExpressCheckoutDetails.', null, $request );
+			$camptix->log( 'Error during GetExpressCheckoutDetails.', $order['attendee_id'], $request );
 			return $camptix->payment_result( $payment_token, CampTix_Plugin::PAYMENT_STATUS_FAILED, $payment_data );
 		}
 	}
